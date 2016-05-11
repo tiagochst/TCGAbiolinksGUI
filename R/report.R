@@ -168,22 +168,29 @@ figures.report <-  function(doc, query){
     report.plot <- function(data, col, title){
         .e <- environment()
 
-        g <- ggplot(data, aes(factor(database),
-                              fill = data[,col]),
-                    environment = .e) +
-            geom_bar(position = "fill") +
-            theme_bw() +
+        counts <- melt(table(data[,col],data$database))
+        g <- ggplot(counts, aes(Var2, value, fill=Var1)) +
+            geom_bar(stat="identity") +
+            theme_pander() +
+            scale_fill_pander(name=col) +
             theme(panel.border = element_blank(),
-                  panel.grid.major = element_blank(),
-                  panel.grid.minor = element_blank(),
-                  axis.line = element_line(colour = "black"),
+                  panel.grid.major = element_line(colour = "black"),
+                  panel.grid.minor = element_line(colour = "black"),
+                  axis.line.x = element_line(colour = "black"),
+                  axis.line.y = element_line(colour = "black"),
                   legend.key = element_rect(colour = 'white'),
+                  legend.text=element_text(size=16),
+                  legend.title = element_text(size = 16),
+                  axis.text= element_text(size = 16),
+                  axis.title.x= element_text(size = 16),
+                  axis.title.y= element_text(size = 16),
                   legend.justification=c(1,1), legend.position=c(1,1)) +
             ggtitle(title) +
-            labs(x="Database", y="Percentage of samples") +
-            scale_fill_discrete(name=col) +
+            labs(x="Database", y="Number of samples") +
+            #scale_fill_discrete(name=col) +
             theme(legend.direction ="vertical",legend.position = "bottom")+
-            guides(fill=guide_legend(ncol=3))
+            guides(fill=guide_legend(ncol=3)) #+
+            #geom_text(aes(label=value), vjust=1.6, color="white", size=5)
 
         return(g)
     }
@@ -192,9 +199,9 @@ figures.report <-  function(doc, query){
     doc = addMarkdown(doc, text = mkd, default.par.properties = parProperties(text.align = "justify", padding.left = 0) )
 
     # add a plot into doc
-    doc = addPlot(doc, function() plot(report.plot(query,"Experiment","Experiment per database")), width = 15, height = 10 )
+    doc = addPlot(doc, function() plot(report.plot(query,"Experiment","Experiment per database")), width = 10, height = 8 )
 
-    doc = addPlot(doc, function() plot(report.plot(query,"Sample","Samples per database")), width = 15, height = 10 )
+    doc = addPlot(doc, function() plot(report.plot(query,"Sample","Samples per database")), width = 10, height = 8 )
 
     mkd = "# Summary plots by platform "
     doc = addMarkdown( doc, text = mkd,
@@ -268,23 +275,29 @@ tcga.report <- function(doc, query){
                           tab <- table(substr(df$patient,14,15))
                           names(tab) <- table.code[names(tab)]
                           tab <- tab[!is.na(names(tab))]
-                          tab <- (as.data.frame(tab))
-                          tab$type <- rownames(tab)
-                          colnames(tab) <- c("Freq","type")
-                          p <- ggplot(tab, aes(x=type,y = Freq,fill=type)) + geom_bar(stat="identity") +
-                              theme_bw() +theme(panel.border = element_blank(),
-                                                panel.grid.major = element_blank(),
-                                                panel.grid.minor = element_blank(),
-                                                axis.line = element_line(colour = "black"),
-                                                legend.key = element_rect(colour = 'white'),
-                                                legend.justification=c(1,1),
-                                                legend.position=c(1,1),
-                                                text = element_text(size=16),
-                                                axis.text.x = element_text(angle = 45, hjust = 1)) + xlab("Type of sample") +
-                              scale_fill_brewer(palette="Set1") + guides(fill=FALSE) + geom_text(aes(label = Freq), size = 4)
+                          tab <- melt(tab)
+                          # Case with only one case: columns Var1 it not created
+                          if(!("Var1" %in% colnames(tab))) tab$Var1 <- rownames(tab)
+                          p <- ggplot(tab, aes(x=Var1,y = value,fill=Var1)) + geom_bar(stat="identity") +
+                              theme_pander() +
+                              scale_fill_pander() +
+                              theme(panel.border = element_blank(),
+                                    panel.grid.major = element_line(colour = "black"),
+                                    panel.grid.minor = element_line(colour = "black"),
+                                    axis.line.x = element_line(colour = "black"),
+                                    axis.line.y = element_line(colour = "black"),
+                                    legend.key = element_rect(colour = 'white'),
+                                    legend.text=element_text(size=16),
+                                    legend.title = element_text(size = 16),
+                                    axis.text= element_text(size = 16),
+                                    axis.text.x= element_text(size = 16,angle = 45, hjust = 1),
+                                    axis.title.x= element_text(size = 16),
+                                    axis.title.y= element_text(size = 16),
+                                    legend.justification=c(1,1), legend.position=c(1,1)) +  xlab("Type of sample") +
+                              ylab("Number of sample") +
+                              guides(fill=FALSE) + geom_text(aes(label = value), size = 4)
                           plot(p)
-
-                      },width = 6, height = 5 )
+                      },width = 8, height = 5 )
 
         df$patient <- NULL
 

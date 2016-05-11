@@ -43,7 +43,7 @@ header <- dashboardHeader(
 
 sidebar <-  dashboardSidebar(
     sidebarMenu(
-        #menuItem("biOMICs search" , tabName = "ontology", icon = icon("search")),
+        menuItem("biOMICs search" , tabName = "ontology", icon = icon("search")),
         #menuItem("Report" , tabName = "report", icon = icon("book")),
         menuItem("TCGA search" , tabName = "tcgaSearch", icon = icon("search")),
         menuItem("OncoPrint" , tabName = "tcgaOncoPrint", icon = icon("picture-o")),

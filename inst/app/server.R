@@ -80,19 +80,22 @@ biOMICsServer <- function(input, output, session) {
     })
 
     dataInput <- reactive({
-        withProgress(message = 'Searching in progress',
-                     detail = 'This may take a while...', value = 0, {
-                         indexes <- c()
-                         query <- data.frame()
-                         link <- c()
-                         term <- isolate({input$ontSamplesFilter})
-                         exp <-  isolate({input$ontExpFilter})
-                         query <- biOmicsSearch(term, experiment = exp)
-                         # improve using subset - subset(data,selection,projection)
-                         biosample.encode <- get.obj("biosample.encode")
-                         return(list(system = names(sort(table(biosample.encode[biosample.encode$biosample %in% query$Sample,]$system),decreasing = T)[1]),
-                                     result = query))
-                     })})
+        if(input$ontReport || input$ontSearchBt){
+            withProgress(message = 'Searching in progress',
+                         detail = 'This may take a while...', value = 0, {
+                             indexes <- c()
+                             query <- data.frame()
+                             link <- c()
+                             term <- isolate({input$ontSamplesFilter})
+                             exp <-  isolate({input$ontExpFilter})
+                             query <- biOmicsSearch(term, experiment = exp)
+                             # improve using subset - subset(data,selection,projection)
+                             biosample.encode <- get.obj("biosample.encode")
+                             return(list(system = names(sort(table(biosample.encode[biosample.encode$biosample %in% query$Sample,]$system),decreasing = T)[1]),
+                                         result = query))
+                         })
+            }
+        })
 
     observeEvent(input$ontReport, {
         result <- dataInput()$result
