@@ -2,9 +2,47 @@ library(shiny)
 library(shinyFiles)
 library(SummarizedExperiment)
 library(TCGAbiolinks)
+library(UpSetR)
+library(ggplot2)
 library(shinyBS)
 library(stringr)
+library(ggrepel)
+library(pathview)
+library(ELMER)
+library(grid)
 options(shiny.maxRequestSize=10000*1024^2)
+
+table.code <- c('01','02','03','04','05','06','07','08','09','10',
+                '11','12','13','14','20','40','50','60','61')
+names(table.code) <- c("Primary solid Tumor","Recurrent Solid Tumor",
+                       "Primary Blood Derived Cancer - Peripheral Blood",
+                       "Recurrent Blood Derived Cancer - Bone Marrow",
+                       "Additional - New Primary",
+                       "Metastatic","Additional Metastatic",
+                       "Human Tumor Original Cells",
+                       "Primary Blood Derived Cancer - Bone Marrow",
+                       "Blood Derived Normal","Solid Tissue Normal",
+                       "Buccal Cell Normal","EBV Immortalized Normal",
+                       "Bone Marrow Normal","Control Analyte",
+                       "Recurrent Blood Derived Cancer - Peripheral Blood",
+                       "Cell Lines","Primary Xenograft Tissue",
+                       "Cell Line Derived Xenograft Tissue")
+
+tcga.code <- c("Primary solid Tumor","Recurrent Solid Tumor",
+               "Primary Blood Derived Cancer - Peripheral Blood",
+               "Recurrent Blood Derived Cancer - Bone Marrow",
+               "Additional - New Primary",
+               "Metastatic","Additional Metastatic",
+               "Human Tumor Original Cells",
+               "Primary Blood Derived Cancer - Bone Marrow",
+               "Blood Derived Normal","Solid Tissue Normal",
+               "Buccal Cell Normal","EBV Immortalized Normal",
+               "Bone Marrow Normal","Control Analyte",
+               "Recurrent Blood Derived Cancer - Peripheral Blood",
+               "Cell Lines","Primary Xenograft Tissue",
+               "Cell Line Derived Xenograft Tissue")
+names(tcga.code) <- c('01','02','03','04','05','06','07','08','09','10',
+                      '11','12','13','14','20','40','50','60','61')
 
 # This will be used to parse the text areas input
 # possibilities of separation , ; \n
@@ -28,6 +66,7 @@ parse.textarea.input <- function(text){
 #' @importFrom downloader download
 #' @keywords internal
 biOMICsServer <- function(input, output, session) {
+    addClass(selector = "body", class = "sidebar-collapse")
     setwd(Sys.getenv("HOME"))
     volumes <- c('Working directory'=getwd())
     shinyDirChoose(input, 'folder', roots=volumes, session=session, restrictions=system.file(package='base'))
@@ -100,7 +139,6 @@ biOMICsServer <- function(input, output, session) {
     observeEvent(input$ontReport, {
         result <- dataInput()$result
 
-        print(result)
         if(is.null(result)) {
             createAlert(session, "alert", "exampleAlert", title = "No system", style =  "danger",
                         content = "No system was found. I can't create a report.", append = FALSE)
@@ -147,9 +185,31 @@ biOMICsServer <- function(input, output, session) {
 
         withProgress( message = 'Prepare in progress',
                       detail = 'This may take a while...', value = 0, {
-                          df <- data.frame(name = input$allRows[seq(6, length(input$allRows), 7)])
-                          x <- TCGAquery()
-                          x <- x[x$name %in% df$name,]
+                          if(!is.null(input$allRows)) {
+                              df <- data.frame(name = input$allRows[seq(6, length(input$allRows), 7)])
+                              x <- TCGAquery()
+                              x <- x[x$name %in% df$name,]
+
+                          } else {
+
+                              tumor <- isolate({input$tcgaTumorFilter})
+                              platform <- isolate({input$tcgaExpFilter})
+                              level <- isolate({input$tcgaLevelFilter})
+
+                              x <- data.frame()
+                              if(length(level) > 0){
+                                  for(i in level){
+                                      x <- rbind(x,
+                                                 TCGAquery(tumor = tumor,
+                                                           platform = platform,
+                                                           level = i))
+                                  }
+                              } else {
+                                  x <- TCGAquery(tumor = tumor,
+                                                 platform = platform,
+                                                 level = level)
+                              }
+                          }
                           if(length(unique(x$Platform)) > 1 & !all(grepl("humanmethylation",unique(x$Platform),ignore.case = TRUE))) {
                               print("We can't prepare these data together")
                               return(NULL)
@@ -256,11 +316,12 @@ biOMICsServer <- function(input, output, session) {
     observeEvent(input$tcgaExpFilter, {
         exp <- isolate({input$tcgaExpFilter})
 
-        if("IlluminaHiSeq_RNASeqV2" %in% exp) {
+        if(grepl("RNASeqV2", exp,ignore.case = TRUE)) {
             shinyjs::show("tcgaFrnaseqv2typeFilter")
         } else {
             shinyjs::hide("tcgaFrnaseqv2typeFilter")
         }
+
         if("IlluminaHiSeq_RNASeq" %in% exp) {
             shinyjs::show("tcgaFrnaseqtypeFilter")
         } else {
@@ -392,18 +453,21 @@ biOMICsServer <- function(input, output, session) {
                          # if types is selected ignore barcodes,
                          # if barcodes is not null ignore selected
                          text.samples <- isolate({input$tcgaDownloadBarcode})
-                         if (length(samplesType) == 0) {
+                         samples <- NULL
+                         downloadType <- isolate({input$tcgaDownloadTypeRb})
+                         if(downloadType == "barcode"){
+
                              if(!is.null(text.samples)){
                                  samples <- parse.textarea.input(text.samples)
-                             } else {
-                                 samples <- NULL
                              }
-                         } else {
+
+                         } else if(downloadType == "type"){
                              samples <- unlist(lapply(samplesType,function(type){
                                  s <- unlist(str_split(aux$barcode,","))
                                  s[grep(type,substr(s,14,15))]
                              }))
                          }
+
                          if(!is.null(samples)){
                              # filter query
                              idx <- unlist(lapply(samples,function(y) {grep(y,x$barcode)}))
@@ -414,15 +478,12 @@ biOMICsServer <- function(input, output, session) {
                          for (i in 1:nrow(x)) {
                              incProgress(1/nrow(x))
                              aux <- x[i,]
-                             if (aux$Platform == "IlluminaHiSeq_RNASeqV2") ftype <- rnaseqv2Ftype
+                             ftype <- NULL
+                             if (grepl("RNASeqV2",aux$Platform,ignore.case = T)) ftype <- rnaseqv2Ftype
                              if (aux$Platform == "IlluminaHiSeq_RNASeq") ftype <- rnaseqFtype
                              if (aux$Platform == "Genome_Wide_SNP_6") ftype <- gwsFtype
 
-                             if(is.null(samples)){
-                                 TCGAdownload(aux, path = getPath,type = ftype)
-                             } else if (length(samples) > 0){
-                                 TCGAdownload(aux, path = getPath,type = ftype,samples = samples)
-                             }
+                             TCGAdownload(aux, path = getPath,type = ftype,samples = samples)
                          }})
         createAlert(session, "tcgasearchmessage", "tcgaAlert", title = "Download completed", style =  "success",
                     content =  paste0("Saved in: ", getPath), append = FALSE)
@@ -477,13 +538,21 @@ biOMICsServer <- function(input, output, session) {
                          "thca"="doi:10.1016/j.cell.2014.09.050",
                          "ucec"="doi:10.1038/nature12113",
                          "ucs"="")
-                if (isolate({input$saveSubtype})) {
+                if (isolate({input$saveSubtypeRda}) || isolate({input$saveSubtypeCsv})) {
+                    save.message <- ""
                     getPath <- parseDirPath(volumes, input$tcgafolder)
                     if (length(getPath) == 0) getPath <- "."
                     filename <- file.path(getPath,paste0(tumor,"_subtype.rda"))
-                    save(tbl, file = filename)
-                    createAlert(session, "tcgasearchmessage", "tcgasearchAlert", title = paste0("File created: ", filename), style =  "success",
-                                content = paste0("Source of the data:", doi[tumor]), append = TRUE)
+                    if (isolate({input$saveSubtypeRda})) {
+                        save(tbl, file = filename)
+                        save.message <- paste0(save.message,"<br> File created: ", filename)
+                    }
+                    if (isolate({input$saveSubtypeCsv})) {
+                        write.csv2(tbl, file = gsub("rda","csv",filename))
+                        save.message <- paste0(save.message,"<br> File created: ", gsub("rda","csv",filename))
+                    }
+                    createAlert(session, "tcgasearchmessage", "tcgasearchAlert", title = paste0("Success"), style =  "success",
+                                content = paste0(save.message,"<br>Source of the data:", doi[tumor]), append = TRUE)
 
                 } else {
                     createAlert(session, "tcgasearchmessage", "tcgasearchAlert", title = "Source of the data", style =  "success",
@@ -548,7 +617,8 @@ biOMICsServer <- function(input, output, session) {
                 return()
             } else {
                 closeAlert(session, "tcgasearchAlert")
-                if (isolate({input$saveClinical})){
+                # Saving data
+                if (isolate({input$saveClinicalRda}) || isolate({input$saveClinicalCsv})){
                     if(isolate({input$clinicalSearchType})){
                         filename <- paste0(tumor,"_clinic_",type,".rda")
                     } else {
@@ -557,10 +627,17 @@ biOMICsServer <- function(input, output, session) {
                     getPath <- parseDirPath(volumes, input$tcgafolder)
                     if (length(getPath) == 0) getPath <- "."
                     filename <- file.path(getPath,filename)
-                    save(tbl, file = filename)
-                    createAlert(session, "tcgasearchmessage", "tcgasearchAlert", title = "Rda created", style =  "info",
-                                content = paste0("File created: ", filename), append = TRUE)
-
+                    save.message <- ""
+                    if (isolate({input$saveClinicalRda})){
+                        save(tbl, file = filename)
+                        save.message <-  paste0(save.message,"<br>File created: ",filename)
+                    }
+                    if (isolate({input$saveClinicalCsv})){
+                        write.csv2(tbl, file = gsub("rda","csv",filename))
+                        save.message <-  paste0(save.message,"<br>File created: ",gsub("rda","csv",filename))
+                    }
+                    createAlert(session, "tcgasearchmessage", "tcgasearchAlert", title = "File created", style =  "info",
+                                content = save.message, append = TRUE)
                 }
                 return(tbl)
             }
@@ -640,7 +717,7 @@ biOMICsServer <- function(input, output, session) {
                          if(is.null(input$allRows)){
                              closeAlert(session, "tcgasearchAlert")
                              createAlert(session, "tcgasearchmessage", "tcgasearchAlert", title = "Error", style = "alert",
-                                         content =  paste0("Please select the files to download"), append = TRUE)
+                                         content =  paste0("Please select which files will be downloaded"), append = TRUE)
                              req(input$allRows)
                          }
                          df <- data.frame(name = input$allRows[seq(5, length(input$allRows), 7)])
@@ -655,6 +732,167 @@ biOMICsServer <- function(input, output, session) {
         createAlert(session, "tcgasearchmessage", "tcgasearchAlert", title = "Download completed", style = "success",
                     content =  paste0("Saved file: ",fout), append = FALSE)
     })
+    #----------------------------------------------------------------------
+    #                                         Summary plot
+    #----------------------------------------------------------------------
+    #-------------------------START controlling show/hide states -----------------
+
+    observeEvent(input$summaryInputRb, {
+        if(isolate({input$summaryInputRb}) == "platsample"){
+            shinyjs::hide("tcgaSummaryExpFilter")
+            shinyjs::show("tcgaSummarySamplestypeFilter")
+            shinyjs::show("summarySetsBarColor")
+            shinyjs::hide("summaryAddBarCount")
+
+        } else {
+            shinyjs::show("tcgaSummaryExpFilter")
+            shinyjs::hide("tcgaSummarySamplestypeFilter")
+            shinyjs::show("summaryAddBarCount")
+            shinyjs::hide("summarySetsBarColor")
+        }
+    })
+
+    #-------------------------END controlling show/hide states -----------------
+
+    observeEvent(input$tcgaSummaryBt , {
+        output$summary.plot <- renderPlot({
+
+            closeAlert(session, "tcgaSummaryAlert")
+
+            tumor <- isolate({input$tcgaSummaryTumorFilter})
+            platform <- isolate({input$tcgaSummaryExpFilter})
+            level <- isolate({input$tcgaSummaryLevelFilter})
+
+            if(is.null(tumor)){
+                createAlert(session, "tcgaSummaryMessage", "tcgaSummaryAlert", title = "Data input error", style =  "danger",
+                            content = "Please select a tumor type", append = FALSE)
+                return(NULL)
+            }
+
+            if(isolate({input$summaryInputRb}) == "platsample"){
+
+
+                result = tryCatch({
+                    x <- TCGAquery(tumor = tumor,level=level)
+                }, warning = function(w) {
+                    next
+                }, error = function(e) {
+                    next
+                })
+                x <- TCGAquery(tumor = tumor,level=level)
+                if(nrow(x)==0) next
+                patient <- unique(substr(unlist(stringr::str_split(x$barcode,",")),1,15))
+
+                samplesType <- isolate({input$tcgaSummarySamplestypeFilter})
+                if (length(samplesType) > 0) {
+                    patient <- unlist(lapply(samplesType,function(type){
+                        patient[grep(type,substr(patient,14,15))]
+                    }))
+                }
+
+                platform <- unique(x$Platform)
+                df <- as.data.frame(matrix(0,nrow=length(patient),ncol=length(platform)+1))
+                colnames(df) <- c("patient", platform)
+                df$patient <- patient
+                for (i in patient){
+                    idx <- grep(i,x$barcode)
+                    plat <- x[idx,"Platform"]
+                    for (j in plat){
+                        df[df$patient == i,j] <- 1
+                    }
+                }
+                if(nrow(df) == 0) {
+                    createAlert(session, "tcgaSummaryMessage", "tcgaSummaryAlert", title = "Results not found", style = "danger",
+                                content =  paste0("No results found"), append = FALSE)
+                    return(NULL)
+                }
+                df$Type <- tcga.code[substr(df$patient,14,15)]
+                withProgress(message = 'Creating plot',
+                             detail = 'This may take a while...', value = 0, {
+                                 upset(df, nsets = length(platform),
+                                       number.angles = 0,
+                                       nintersects = 100,
+                                       point.size = 3, name.size = 12,
+                                       line.size = 1,
+                                       mainbar.y.label = "Platform Intersections",
+                                       sets.x.label = "Samples Per Platform",
+                                       order.by = "freq",
+                                       decreasing = T,
+                                       #group.by = "sets",
+                                       sets.bar.color = isolate({input$summarySetsBarColor}))
+                             })
+            } else {
+                if(is.null(platform)){
+                    createAlert(session, "tcgaSummaryMessage", "tcgaSummaryAlert", title = "Data input error", style =  "danger",
+                                content = "Please select at least one platform", append = FALSE)
+                    return(NULL)
+                }
+                not.found <- c()
+                tbl <- data.frame()
+                for(i in platform){
+                    for(j in tumor){
+                        x <- TCGAquery(tumor = j,platform = i,level=level)
+                        if(!is.null(x)){
+                            patient <- unique(substr(unlist(stringr::str_split(x$barcode,",")),1,15))
+                            if(nchar(patient[1]) < 15) next
+                            type <- tcga.code[substr(patient,14,15)]
+                            tab <- table(substr(patient,14,15))
+                            names(tab) <- tcga.code[names(tab)]
+                            tab <- tab[!is.na(names(tab))]
+                            tab <- (as.data.frame(tab))
+                            tab$type <- rownames(tab)
+                            tab$Platform <- i
+                            tab$Tumor <- j
+                            colnames(tab) <- c("Freq","type","Platform","Tumor")
+
+                            if(nrow(tbl) == 0){
+                                tbl <- tab
+                            } else {
+                                tbl <- rbind(tbl,tab)
+                            }
+                        } else {
+                            not.found <- c(not.found, paste0("<li>Tumor: ",j,"  | Platform: ",i,"  | Level: ", level,"</li>"))
+                        }
+                    }
+                }
+                if(length(not.found) > 0) {
+                    createAlert(session, "tcgaSummaryMessage", "tcgaSummaryAlert", title = "Results not found", style = "danger",
+                                content =  paste0("These results were not found","<br><ul>", paste(not.found, collapse = ""),"</ul>"), append = FALSE)
+                }
+                if(nrow(tbl) == 0) {
+                    return(NULL)
+                }
+                p <- ggplot(tbl, aes(x=type,y = Freq,fill=type)) + geom_bar(stat="identity") +
+                    theme_bw() +theme(
+                        panel.grid.major = element_blank(),
+                        panel.grid.minor = element_blank(),
+                        axis.line.x = element_line(colour = "black"),
+                        axis.line.y = element_line(colour = "black"),
+                        legend.key = element_rect(colour = 'white'),
+                        legend.justification=c(1,1),
+                        legend.position=c(1,1),
+                        text = element_text(size=16),
+                        axis.text.x = element_text(angle = 45, hjust = 1)) + xlab("Type of sample") +
+                    scale_fill_brewer(palette="Set1") + guides(fill=FALSE)
+                #facet_wrap(~Platform + Tumor, ncol = isolate({input$summaryncol}))
+                if(isolate({input$summaryAddBarCount})){
+                    p <- p + geom_text(aes(vjust = 0, nudge_y = 0.7,label = Freq), size = 4)
+                }
+                p <- p + facet_grid(Platform ~ Tumor) +
+                    theme(strip.background = element_rect(colour="navy", fill="navy",
+                                                          size=1.5, linetype="solid"), strip.text=element_text(face= "bold",colour = "white"))
+                plot(p)
+            }
+        })
+
+    })
+    observeEvent(input$tcgaSummaryBt , {
+        updateCollapse(session, "collapseTCGAsummary", open = "Summary")
+        output$tcgaSummary <- renderUI({
+            plotOutput("summary.plot", width = paste0(isolate({input$summarywidth}), "%"), height = isolate({input$summaryheight}))
+        })})
+
+
 
     #----------------------------------------------------------------------
     #                                         MAF
@@ -682,11 +920,16 @@ biOMICsServer <- function(input, output, session) {
     observeEvent(input$oncoInputRb, {
         if(input$oncoInputRb == "Selection"){
             shinyjs::hide("oncoGenesTextArea")
+            shinyjs::hide("oncoGenesFiles")
             shinyjs::show("oncoGenes")
-        } else {
+        } else  if(input$oncoInputRb == "Selection"){
             shinyjs::show("oncoGenesTextArea")
             shinyjs::hide("oncoGenes")
-
+            shinyjs::hide("oncoGenesFiles")
+        } else {
+            shinyjs::hide("oncoGenesTextArea")
+            shinyjs::hide("oncoGenes")
+            shinyjs::show("oncoGenesFiles")
         }
     })
 
@@ -694,6 +937,8 @@ biOMICsServer <- function(input, output, session) {
 
     shinyFileChoose(input, 'maffile', roots=volumes, session=session, restrictions=system.file(package='base'))
     shinyFileChoose(input, 'mafAnnotation', roots=volumes, session=session, restrictions=system.file(package='base'))
+    shinyFileChoose(input, 'oncoGenesFiles', roots=volumes, session=session, restrictions=system.file(package='base'))
+
     annotation.maf <- function(){
         inFile <- input$mafAnnotation
         if (is.null(inFile)) return(NULL)
@@ -719,8 +964,45 @@ biOMICsServer <- function(input, output, session) {
         return(ret)
 
     }
-    observeEvent(input$oncoprintPlot , {
 
+    genesByFile <- function(){
+        inFile <- input$oncoGenesFiles
+        if (is.null(inFile)) return(NULL)
+        file  <- as.character(parseFilePaths(volumes, inFile)$datapath)
+        if(tools::file_ext(file)=="csv"){
+            df <- read.csv2(file,header = T,stringsAsFactors = FALSE)
+            rownames(df) <- df[,1]
+            df[,1] <- NULL
+        } else if(tools::file_ext(file)=="rda"){
+            df <- get(load(file))
+        } else if(tools::file_ext(file)=="txt"){
+            df <- read.table(file,header = T)
+        } else {
+            createAlert(session, "oncomessage", "oncoAlert", title = "Data input error", style =  "danger",
+                        content = paste0("Sorry, but I'm expecting a csv, rda or txt file, but I got a: ",
+                                         tools::file_ext(file)), append = FALSE)
+            return(NULL)
+        }
+        genes <- NULL
+        # if a data frame return the column with gene symbols
+        if(class(df)==class(data.frame())){
+            if("mRNA" %in% colnames(df)){
+                df <- subset(df,df$status != "Insignificant")
+                aux <- strsplit(df$mRNA,"\\|")
+                genes <- unlist(lapply(aux,function(x) x[1]))
+            } else if("Gene_symbol" %in% colnames(df)){
+                genes <- df$Gene_symbol
+            } else {
+                createAlert(session, "oncomessage", "oncoAlert", title = "Data input error", style =  "danger",
+                            content = paste0("Sorry, but I'm expecting a column called Gene_symbol "), append = FALSE)
+                return(NULL)
+            }
+        }
+        return(genes)
+    }
+
+    observeEvent(input$oncoprintPlot , {
+        closeAlert(session,"oncoAlert")
         output$oncoploting <- renderPlot({
             mut <- isolate({mut()})
             annotation <- isolate({annotation.maf()})
@@ -734,15 +1016,21 @@ biOMICsServer <- function(input, output, session) {
                 genes <- toupper(parse.textarea.input(textarea))
                 not.found <- genes[!(genes %in% mut$Hugo_Symbol)]
                 if(length(not.found) > 0){
-                    closeAlert("eaAlert")
                     createAlert(session, "oncomessage", "oncoAlert", title = "Data input error", style =  "danger",
                                 content = paste0("Sorry, I cant't find these genes: ", not.found), append = FALSE)
                     genes <-  genes[genes %in% mut$Hugo_Symbol]
                 }
-            } else {
+            } else if(isolate({input$oncoInputRb}) == "Selection") {
                 genes <- isolate({input$oncoGenes})
+            } else if(isolate({input$oncoInputRb}) == "file") {
+                genes <- genesByFile()
+                not.found <- genes[!(genes %in% mut$Hugo_Symbol)]
+                if(length(not.found) > 0){
+                    createAlert(session, "oncomessage", "oncoAlert", title = "Data input error", style =  "danger",
+                                content = paste0("Sorry, I cant't find these genes: ", not.found), append = FALSE)
+                    genes <-  genes[genes %in% mut$Hugo_Symbol]
+                }
             }
-
             if(is.null(genes)){
                 createAlert(session, "oncomessage", "oncoAlert", title = "Error", style =  "danger",
                             content = "Please select the genes (max 50)", append = TRUE)
@@ -756,9 +1044,12 @@ biOMICsServer <- function(input, output, session) {
                 annotation <- NULL
             } else if("bcr_patient_barcode" %in% colnames(annotation)) {
                 annotation <- annotation[,c("bcr_patient_barcode",cols)]
+            } else if("patient" %in% colnames(annotation)) {
+                annotation <- annotation[,c("patient",cols)]
+                colnames(annotation)[which(colnames(annotation) == "patient")] <- "bcr_patient_barcode"
             } else {
                 createAlert(session, "oncomessage", "oncoAlert", title = "Error", style =  "danger",
-                            content = "I couldn't find the bcr_patient_barcode column in the annotation", append = TRUE)
+                            content = "I couldn't find the bcr_patient_barcode or patient column in the annotation", append = TRUE)
                 return(NULL)
             }
 
@@ -812,32 +1103,240 @@ biOMICsServer <- function(input, output, session) {
     })
 
     ##----------------------------------------------------------------------
+    #                             Volcano plot
+    ##----------------------------------------------------------------------
+    shinyjs::hide("volcanoNamesFill")
+    observeEvent(input$volcanoNames, {
+        if(input$volcanoNames){
+            shinyjs::show("volcanoNamesFill")
+        } else {
+            shinyjs::hide("volcanoNamesFill")
+        }
+    })
+    observeEvent(input$volcanoInputRb, {
+        if(input$volcanoInputRb == "met"){
+            shinyjs::show("colHypomethylated")
+            shinyjs::show("colHypermethylated")
+            shinyjs::hide("colUpregulated")
+            shinyjs::hide("colDownregulated")
+            shinyjs::show("volcanoxcutMet")
+            shinyjs::hide("volcanoxcutExp")
+        } else  if(input$volcanoInputRb == "exp"){
+            shinyjs::hide("colHypomethylated")
+            shinyjs::hide("colHypermethylated")
+            shinyjs::show("colUpregulated")
+            shinyjs::show("colDownregulated")
+            shinyjs::show("volcanoxcutExp")
+            shinyjs::hide("volcanoxcutMet")
+        }
+    })
+
+    shinyFileChoose(input, 'volcanofile', roots=volumes, session=session, restrictions=system.file(package='base'))
+
+    volcanodata <-  reactive({
+        inFile <- input$volcanofile
+        if (is.null(inFile)) return(NULL)
+        file  <- as.character(parseFilePaths(volumes, inFile)$datapath)
+        # verify if the file is a csv
+        ext <- tools::file_ext(file)
+        if(ext != "csv"){
+            createAlert(session, "dmrmessage", "dmrAlert", title = "Data input error", style =  "danger",
+                        content = paste0("Sorry, but I'm expecting a csv file, but I got a: ",
+                                         ext), append = FALSE)
+            return(NULL)
+        }
+
+        withProgress(message = 'Loading data',
+                     detail = 'This may take a while...', value = 0, {
+                         df <- read.csv2(file,header = T)
+                     })
+        return(df)
+    })
+
+    observeEvent(input$volcanofile, {
+        file  <- basename(as.character(parseFilePaths(volumes, input$volcanofile)$datapath))
+        if(length(file) > 0){
+            file <- unlist(str_split(file,"_"))
+            group1 <- file[4]
+            group2 <- file[5]
+            pcut <- file[7]
+            meancut <- gsub(".csv","",file[9])
+            updateNumericInput(session, "volcanoxcutMet", value = meancut)
+            updateNumericInput(session, "volcanoxcutExp", value = meancut)
+            updateNumericInput(session, "volcanoycut", value = pcut)
+        }
+    })
+
+    # automatically change the type based in the input
+    observe({
+        if(!is.null(input$volcanofile)){
+            file  <- basename(as.character(parseFilePaths(volumes, input$volcanofile)$datapath))
+            selected <- "met"
+            if(grepl("DEA",file))  selected <- "exp"
+            updateRadioButtons(session, "volcanoInputRb", selected = selected)
+        }
+    })
+    observe({
+        if(!is.null(input$volcanoHighlight)){
+            updateCheckboxInput(session, "volcanoNames",  value = TRUE)
+            updateCheckboxInput(session, "volcanoNamesFill",  value = TRUE)
+            updateSelectizeInput(session, 'volcanoShowHighlitgh', selected = "highlighted")
+        } else {
+            updateSelectizeInput(session, 'volcanoShowHighlitgh', selected = "significant")
+        }
+    })
+    observe({
+        data <- volcanodata()
+        if(!is.null(data)) {
+            file  <- basename(as.character(parseFilePaths(volumes, input$volcanofile)$datapath))
+
+            if(grepl("DEA",file)){
+                updateSelectizeInput(session, 'volcanoHighlight', choices = as.character(na.omit(unique(data$Gene_Symbol))), server = TRUE)
+            } else {
+                updateSelectizeInput(session, 'volcanoHighlight', choices = as.character(na.omit(unique(data$probeID))), server = TRUE)
+            }
+        }
+    })
+
+    observeEvent(input$volcanoPlotBt , {
+        output$volcano.plot <- renderPlot({
+
+            # read csv file with results
+            data <- isolate({volcanodata()})
+            names.fill <- isolate({input$volcanoNamesFill})
+            if(isolate({input$volcanoInputRb})=="met") {
+                x.cut <- isolate({as.numeric(input$volcanoxcutMet)})
+            } else {
+                x.cut <- isolate({as.numeric(input$volcanoxcutExp)})
+            }
+            y.cut <- isolate({as.numeric(input$volcanoycut)})
+
+            # Set parameters based in the filename
+            # patterns are
+            # DEA_result_groupCol_group1_group2_pcut_0.05_logFC.cut_0.csv
+            # DMR_results_groupCol_group1_group2_pcut_0.05_meancut_0.3.csv
+            file  <- basename(as.character(parseFilePaths(volumes, input$volcanofile)$datapath))
+            file <- unlist(str_split(file,"_"))
+            groupCol <- file[3]
+            group1 <- file[4]
+            group2 <- file[5]
+            names <- NULL
+
+            # methylation pipeline
+            if(isolate({input$volcanoInputRb})=="met"){
+
+                diffcol <- paste("diffmean", group1, group2,sep = ".")
+                pcol <- paste("p.value.adj", group1, group2,sep = ".")
+
+                if(isolate({input$volcanoNames})) names <- data$probeID
+                label <- c("Not Significant",
+                           "Hypermethylated",
+                           "Hypomethylated")
+                label[2:3] <-  paste(label[2:3], "in", group2)
+
+                # Update data into a file
+                if(isolate({input$volcanoSave})){
+                    statuscol <- paste("status",group1,group2,sep = ".")
+                    statuscol2 <- paste("status",group2,group1,sep = ".")
+                    data[,statuscol] <-  "Not Significant"
+                    data[,statuscol2] <-  "Not Significant"
+
+                    # get significant data
+                    sig <-  data[,pcol] < y.cut
+                    sig[is.na(sig)] <- FALSE
+                    # hypermethylated samples compared to old state
+                    hyper <- data[,diffcol]  > x.cut
+                    hyper[is.na(hyper)] <- FALSE
+
+                    # hypomethylated samples compared to old state
+                    hypo <- data[,diffcol] < (-x.cut)
+                    hypo[is.na(hypo)] <- FALSE
+
+                    if (any(hyper & sig)) data[hyper & sig,statuscol] <- paste("Hypermethylated","in", group2)
+                    if (any(hyper & sig)) data[hyper & sig,statuscol2] <- paste("Hypomethylated","in", group1)
+                    if (any(hypo & sig)) data[hypo & sig,statuscol] <- paste("Hypomethylated","in", group2)
+                    if (any(hypo & sig)) data[hypo & sig,statuscol2] <- paste("Hypermethylated","in", group1)
+                    csv <- paste0(paste("DMR_results",groupCol,group1,group2, "pcut",y.cut,"meancut",x.cut,  sep = "_"),".csv")
+                    write.csv2(data,file =  csv)
+                }
+
+                withProgress(message = 'Creating plot',
+                             detail = 'This may take a while...', value = 0, {
+                                 TCGAVisualize_volcano(x = data[,diffcol],
+                                                       y = data[,pcol],
+                                                       ylab =   expression(paste(-Log[10],
+                                                                                 " (FDR corrected -P values)")),
+                                                       xlab =  expression(paste(
+                                                           "DNA Methylation difference (",beta,"-values)")
+                                                       ),
+                                                       color = c(isolate({input$colinsignificant}),
+                                                                 isolate({input$colHypermethylated}),
+                                                                 isolate({input$colHypomethylated})),
+                                                       title =  paste("Volcano plot", "(", group2, "vs", group1,")"),
+                                                       legend=  "Legend",
+                                                       label = label,
+                                                       names = names,
+                                                       names.fill = names.fill,
+                                                       x.cut = x.cut,
+                                                       y.cut = y.cut,
+                                                       show.names = isolate({input$volcanoShowHighlitgh}),
+                                                       highlight=isolate({input$volcanoHighlight}),
+                                                       highlight.color = isolate({input$volcanoColHighlight}),
+                                                       filename = NULL)
+                             })
+            } else {
+
+                label <- c("Not Significant",
+                           "Upregulated",
+                           "Downregulated")
+                label[2:3] <-  paste(label[2:3], "in", group2)
+                if(isolate({input$volcanoNames})) names <- as.character(data$mRNA)
+
+
+                # Update data into a file
+                if(isolate({input$volcanoSave})){
+                    exp$status <- "Insignificant"
+                    exp[exp$logFC >= x.cut & exp$FDR <= y.cut,"status"] <- paste0("Upregulated in ", group2)
+                    exp[exp$logFC <= -x.cut & exp$FDR <= y.cut,"status"] <- paste0("Downregulated in ", group2)
+                    out.filename <- paste0(paste("DEA_results",groupCol, group1, group2,"pcut",fdr.cut,"logFC.cut",logFC.cut,sep="_"),".csv")
+                    write.csv2(exp, file = out.filename)
+                }
+
+                withProgress(message = 'Creating plot',
+                             detail = 'This may take a while...', value = 0, {
+                                 TCGAVisualize_volcano(x = data$logFC,
+                                                       y = data$FDR,
+                                                       ylab =   expression(paste(-Log[10],
+                                                                                 " (FDR corrected -P values)")),
+                                                       xlab = " Gene expression fold change (Log2)",
+                                                       color = c(isolate({input$colinsignificant}),
+                                                                 isolate({input$colUpregulated}),
+                                                                 isolate({input$colDownregulated})),
+                                                       title =  paste("Volcano plot", "(", group2, "vs", group1,")"),
+                                                       legend=  "Legend",
+                                                       label = label,
+                                                       names = names,
+                                                       x.cut = x.cut,
+                                                       y.cut = y.cut,
+                                                       show.names = isolate({input$volcanoShowHighlitgh}),
+                                                       highlight=isolate({input$volcanoHighlight}),
+                                                       highlight.color = isolate({input$volcanoColHighlight}),
+                                                       filename = NULL)
+                             })
+            }
+        })
+    })
+    observeEvent(input$volcanoPlotBt , {
+        updateCollapse(session, "collapseVolcano", open = "Volcano plot")
+        output$volcanoPlot <- renderUI({
+            plotOutput("volcano.plot", width = paste0(isolate({input$volcanowidth}), "%"), height = isolate({input$volcanoheight}))
+        })})
+
+    ##----------------------------------------------------------------------
     #                             DMR analysis
     ##----------------------------------------------------------------------
 
     #-------------------------START controlling show/hide states -----------------
-    shinyjs::hide("dmrNamesVolcanoFill")
-    observeEvent(input$dmrNamesVolcano, {
-        if(input$dmrNamesVolcano){
-            shinyjs::show("dmrNamesVolcanoFill")
-        } else {
-            shinyjs::hide("dmrNamesVolcanoFill")
-        }
-    })
-    observeEvent(input$heatmapInputRb, {
-        if(input$heatmapInputRb == "text") {
-            shinyjs::show("heatmapProbesTextArea")
-            shinyjs::hide("heatmap.hypoprobesCb")
-            shinyjs::hide("heatmap.hyperprobesCb")
-        } else if(input$heatmapInputRb == "Status") {
-            shinyjs::hide("heatmapProbesTextArea")
-            shinyjs::show("heatmap.hypoprobesCb")
-            shinyjs::show("heatmap.hyperprobesCb")
-        }
-    })
-    observeEvent(input$heatmap.sortCb, {
-        shinyjs::toggle("heatmapSortCol")
-    })
 
     #-------------------------END controlling show/hide states -----------------
     observeEvent(input$dmrAnalysis , {
@@ -859,10 +1358,15 @@ biOMICsServer <- function(input, output, session) {
                                                    groupCol = isolate({input$dmrgroupCol}),
                                                    group1 = group1,
                                                    group2 = group2,
+                                                   plot.filename = paste0("DMR_volcano_",group1,"_vs_",group2,".pdf"),
                                                    p.cut = isolate({input$dmrpvalue}),
                                                    diffmean.cut = isolate({input$dmrthrsld}),
                                                    cores = isolate({input$dmrcores}))
-                             message <- paste0(message,"<li>DMR_results.", isolate({input$dmrgroupCol}), ".", group1, ".", group2, ".csv</li>")
+                             message <- paste0(message,"<li>DMR_results_",
+                                               gsub("_",".",isolate({input$dmrgroupCol})),
+                                               "_", gsub("_",".",group1), "_", gsub("_",".",group2), "_",
+                                               "pcut_",isolate({input$dmrpvalue}), "_",
+                                               "meancut_",isolate({input$dmrthrsld}),".csv</li>")
                          }
                          file  <- as.character(parseFilePaths(volumes, input$dmrfile)$datapath)
                          if(!grepl("results",file)) file <- gsub(".rda","_results.rda",file)
@@ -874,34 +1378,36 @@ biOMICsServer <- function(input, output, session) {
                     append = FALSE)
     })
     shinyFileChoose(input, 'dmrfile', roots=volumes, session=session, restrictions=system.file(package='base'))
-    shinyFileChoose(input, 'volcanofile', roots=volumes, session=session, restrictions=system.file(package='base'))
+    shinyFileChoose(input, 'meanmetfile', roots=volumes, session=session, restrictions=system.file(package='base'))
+    shinyFileChoose(input, 'heatmapfile', roots=volumes, session=session, restrictions=system.file(package='base'))
+    shinyFileChoose(input, 'heatmapresultsfile', roots=volumes, session=session, restrictions=system.file(package='base'))
 
-    volcanodata <-  reactive({
-        inFile <- input$volcanofile
+    meandata <-  reactive({
+        inFile <- input$meanmetfile
         if (is.null(inFile)) return(NULL)
-        print("READING CSV DATA")
-        file  <- as.character(parseFilePaths(volumes, inFile)$datapath)
-        # verify if the file is a csv
-        ext <- tools::file_ext(file)
-        if(ext != "csv"){
-            createAlert(session, "dmrmessage", "dmrAlert", title = "Data input error", style =  "danger",
-                        content = paste0("Sorry, but I'm expecting a csv file, but I got a: ",
-                                         ext), append = FALSE)
-            return(NULL)
-        }
+        file  <- as.character(parseFilePaths(volumes, input$meanmetfile)$datapath)
 
         withProgress(message = 'Loading data',
                      detail = 'This may take a while...', value = 0, {
-                         df <- read.csv2(file,header = T)
+                         result.file <- gsub(".rda","_results.rda",file)
+                         if(file.exists(result.file)) {
+                             se <- get(load(result.file))
+                         } else {
+                             se <- get(load(file))
+                         }
                      })
-        print("END READING DATA")
-        return(df)
-    })
+        if(class(se)!= class(as(SummarizedExperiment(),"RangedSummarizedExperiment"))){
+            createAlert(session, "dmrmessage", "dmrAlert", title = "Data input error", style =  "danger",
+                        content = paste0("Sorry, but I'm expecting a Summarized Experiment object, but I got a: ",
+                                         class(se)), append = FALSE)
+            return(NULL)
+        }
+        return(se)
 
+    })
     dmrdata <-  reactive({
         inFile <- input$dmrfile
         if (is.null(inFile)) return(NULL)
-        print("READING DATA")
         file  <- as.character(parseFilePaths(volumes, input$dmrfile)$datapath)
 
         withProgress(message = 'Loading data',
@@ -919,40 +1425,22 @@ biOMICsServer <- function(input, output, session) {
                                          class(se)), append = FALSE)
             return(NULL)
         }
-        print("END READING DATA")
         return(se)
 
     })
 
-
-
-
-    observeEvent(input$heatmapgroupCol , {
-        updateSelectizeInput(session, 'heatmapgroup1', choices = {
-            if (class(dmrdata()) == class(as(SummarizedExperiment(),"RangedSummarizedExperiment"))){
-                if (!is.null(dmrdata()) & input$heatmapgroupCol != "" )
-                    as.character(colData(dmrdata())[,input$heatmapgroupCol])
-            }}, server = TRUE)
+    observe({
+        if((input$heatmap.sortCb)){
+            updateCheckboxInput(session, "heatmap.clustercol",  value = FALSE)
+        }
     })
-    observeEvent(input$heatmapgroupCol , {
-        updateSelectizeInput(session, 'heatmapgroup2', choices = {
-            if (class(dmrdata()) == class(as(SummarizedExperiment(),"RangedSummarizedExperiment"))){
-                if (!is.null(dmrdata()) & input$heatmapgroupCol != "" )
-                    as.character(colData(dmrdata())[,input$heatmapgroupCol])
-            }}, server = TRUE)
-    })
+
     observe({
         updateSelectizeInput(session, 'heatmapSortCol', choices = {
-            if (class(dmrdata()) == class(as(SummarizedExperiment(),"RangedSummarizedExperiment"))){
-                if (!is.null(dmrdata()) & !is.null(input$colmetadataheatmap))
+            if (class(heatmapdata()) == class(as(SummarizedExperiment(),"RangedSummarizedExperiment"))){
+                if (!is.null(heatmapdata()) & !is.null(input$colmetadataheatmap))
                     as.character(input$colmetadataheatmap)
             }}, server = TRUE)
-    })
-
-    observe({
-        updateSelectizeInput(session, 'heatmapgroupCol', choices = {
-            if(!is.null(dmrdata())) as.character(colnames(colData(dmrdata())))
-        }, server = TRUE)
     })
 
     observeEvent(input$dmrgroupCol , {
@@ -969,87 +1457,62 @@ biOMICsServer <- function(input, output, session) {
     })
     observe({
         updateSelectizeInput(session, 'meanmetsubgroupCol', choices = {
-            if(!is.null(dmrdata())) as.character(colnames(colData(dmrdata())))
+            if(!is.null(meandata())) as.character(colnames(colData(meandata())))
         }, server = TRUE)
     })
     observe({
         updateSelectizeInput(session, 'meanmetgroupCol', choices = {
-            if(!is.null(dmrdata())) as.character(colnames(colData(dmrdata())))
+            if(!is.null(meandata())) as.character(colnames(colData(meandata())))
         }, server = TRUE)
     })
 
 
-    observeEvent(input$volcanoPlot , {
-        output$volcano.plot <- renderPlot({
 
-            file  <- basename(as.character(parseFilePaths(volumes, input$volcanofile)$datapath))
-            file <- unlist(str_split(file,"\\."))
-            group1 <- file[3]
-            group2 <- file[4]
-
-            data <- isolate({volcanodata()})
-
-            diffcol <- paste("diffmean", group1, group2,sep = ".")
-            pcol <- paste("p.value.adj", group1, group2,sep = ".")
-            names <- NULL
-            if(isolate({input$dmrNamesVolcano})) names <- data$probeID
-            label <- c("Not Significant",
-                       "Hypermethylated",
-                       "Hypomethylated")
-            label[2:3] <-  paste(label[2:3], "in", group2)
-            withProgress(message = 'Creating plot',
-                         detail = 'This may take a while...', value = 0, {
-                             TCGAVisualize_volcano(x = data[,diffcol],
-                                                   y = data[,pcol],
-                                                   ylab =   expression(paste(-Log[10],
-                                                                             " (FDR corrected -P values)")),
-                                                   xlab =  expression(paste(
-                                                       "DNA Methylation difference (",beta,"-values)")
-                                                   ),
-                                                   color = c(isolate({input$colinsignificant}),
-                                                             isolate({input$colHypermethylated}),
-                                                             isolate({input$colHypomethylated})),
-                                                   title =  paste("Volcano plot", "(", group2, "vs", group1,")"),
-                                                   legend=  "Legend",
-                                                   label = label,
-                                                   names = names,
-                                                   names.fill = isolate({input$dmrNamesVolcanoFill}),
-                                                   x.cut = isolate({as.numeric(input$dmrthrsld)}),
-                                                   y.cut = isolate({as.numeric(input$dmrpvalue)}),
-                                                   filename = NULL)
-                         })
-
-        })})
 
     observeEvent(input$meanmetPlot , {
-        output$mean.plotting <- renderPlot({
 
+        output$mean.plotting <- renderPlot({
+            closeAlert(session, "meanmetAlert")
             jitter <- isolate({input$meanmetplotjitter})
             sort <- isolate({input$meanmetsort})
             angle <- isolate({input$meanmetAxisAngle})
+            data <- meandata()
 
-            if(isolate({input$meanmetgroupCol}) =="") {
+            if(is.null(data)){
+                createAlert(session, "meanmetmessage", "meanmetAlert", title = "Missing data", style =  "danger",
+                            content = paste0("Please select the data"), append = FALSE)
+                return(NULL)
+            }
+
+            if(isolate({input$meanmetgroupCol}) == "") {
                 group <- NULL
             } else {
                 group <- isolate({input$meanmetgroupCol})
             }
 
-            if(isolate({input$meanmetsubgroupCol}) =="") {
+            if(is.null(group)){
+                createAlert(session, "meanmetmessage", "meanmetAlert", title = "Missing group column", style =  "danger",
+                            content = paste0("Please select group column"), append = FALSE)
+                return(NULL)
+            }
+
+            if(isolate({input$meanmetsubgroupCol}) == "") {
                 subgroup <- NULL
             } else {
                 subgroup <- isolate({input$meanmetsubgroupCol})
             }
+
             withProgress(message = 'Creating plot',
                          detail = 'This may take a while...', value = 0, {
                              if(is.null(sort)){
-                                 TCGAvisualize_meanMethylation(data=dmrdata(),
+                                 TCGAvisualize_meanMethylation(data=data,
                                                                groupCol=group,
                                                                subgroupCol=subgroup,
                                                                filename = NULL,
                                                                plot.jitter = jitter,
                                                                axis.text.x.angle = angle )
                              } else {
-                                 TCGAvisualize_meanMethylation(data=dmrdata(),
+                                 TCGAvisualize_meanMethylation(data=data,
                                                                groupCol=group,
                                                                subgroupCol=subgroup,
                                                                filename = NULL,
@@ -1061,14 +1524,9 @@ biOMICsServer <- function(input, output, session) {
         })})
 
     observeEvent(input$meanmetPlot , {
-        updateCollapse(session, "collapseDmr", open = "DMR plots")
-        output$dmrPlot <- renderUI({
+        updateCollapse(session, "collapsemeanmet", open = "Mean DNA methylation plot")
+        output$meanMetplot <- renderUI({
             plotOutput("mean.plotting", width = paste0(isolate({input$meanmetwidth}), "%"), height = isolate({input$meanmetheight}))
-        })})
-    observeEvent(input$volcanoPlot , {
-        updateCollapse(session, "collapseDmr", open = "DMR plots")
-        output$dmrPlot <- renderUI({
-            plotOutput("volcano.plot", width = paste0(isolate({input$meanmetwidth}), "%"), height = isolate({input$meanmetheight}))
         })})
 
     output$probesSE <- renderDataTable({
@@ -1100,55 +1558,177 @@ biOMICsServer <- function(input, output, session) {
     ), callback = "function(table) {table.on('click.dt', 'tr', function() {Shiny.onInputChange('allRows',table.rows('.selected').data().toArray());});}"
     )
 
+    ##----------------------------------------------------------------------
+    #                             Heatmap
+    ##----------------------------------------------------------------------
 
-    observeEvent(input$heatmapPlot , {
+    #-------------------------START controlling show/hide states -----------------
+
+    observe({
+        if(input$heatmapTypeInputRb == "met") {
+            shinyjs::show("heatmapProbesInputRb")
+            shinyjs::hide("heatmapGenesInputRb")
+            shinyjs::hide("heatmapGenesTextArea")
+            shinyjs::hide("heatmap.upGenesCb")
+            shinyjs::hide("heatmap.downGenewsCb")
+            if(input$heatmapProbesInputRb == "text"){
+                shinyjs::show("heatmapProbesTextArea")
+                shinyjs::hide("heatmap.hypoprobesCb")
+                shinyjs::hide("heatmap.hyperprobesCb")
+            } else {
+                shinyjs::hide("heatmapProbesTextArea")
+                shinyjs::show("heatmap.hypoprobesCb")
+                shinyjs::show("heatmap.hyperprobesCb")
+            }
+        } else if(input$heatmapTypeInputRb == "exp") {
+            shinyjs::show("heatmapGenesInputRb")
+            shinyjs::hide("heatmapProbesTextArea")
+            shinyjs::hide("heatmap.hypoprobesCb")
+            shinyjs::hide("heatmap.hyperprobesCb")
+            shinyjs::hide("heatmapProbesInputRb")
+            if(input$heatmapGenesInputRb == "text"){
+                shinyjs::show("heatmapGenesTextArea")
+                shinyjs::hide("heatmap.upGenesCb")
+                shinyjs::hide("heatmap.downGenewsCb")
+            } else {
+                shinyjs::hide("heatmapGenesTextArea")
+                shinyjs::show("heatmap.upGenesCb")
+                shinyjs::show("heatmap.downGenewsCb")
+            }
+        }
+    })
+    observeEvent(input$heatmap.sortCb, {
+        shinyjs::toggle("heatmapSortCol")
+    })
+
+    #-------------------------END controlling show/hide states -----------------
+
+    heatmapresultdata <-  reactive({
+        inFile <- input$heatmapresultsfile
+        if (is.null(inFile)) return(NULL)
+        file  <- as.character(parseFilePaths(volumes, inFile)$datapath)
+        # verify if the file is a csv
+        ext <- tools::file_ext(file)
+        if(ext != "csv"){
+            createAlert(session, "dmrmessage", "dmrAlert", title = "Data input error", style =  "danger",
+                        content = paste0("Sorry, but I'm expecting a csv file, but I got a: ",
+                                         ext), append = FALSE)
+            return(NULL)
+        }
+
+        withProgress(message = 'Loading data',
+                     detail = 'This may take a while...', value = 0, {
+                         df <- read.csv2(file,header = TRUE, stringsAsFactors = FALSE)
+                     })
+        return(df)
+    })
+
+    heatmapdata <-  reactive({
+        inFile <- input$heatmapfile
+        if (is.null(inFile)) return(NULL)
+        file  <- as.character(parseFilePaths(volumes, input$heatmapfile)$datapath)
+
+        withProgress(message = 'Loading data',
+                     detail = 'This may take a while...', value = 0, {
+                         result.file <- gsub(".rda","_results.rda",file)
+                         if(file.exists(result.file)) {
+                             se <- get(load(result.file))
+                         } else {
+                             se <- get(load(file))
+                         }
+                     })
+        if(class(se)!= class(as(SummarizedExperiment(),"RangedSummarizedExperiment"))){
+            createAlert(session, "heatmapmessage", "heatmapAlert", title = "Data input error", style =  "danger",
+                        content = paste0("Sorry, but I'm expecting a Summarized Experiment object, but I got a: ",
+                                         class(se)), append = FALSE)
+            return(NULL)
+        }
+        return(se)
+
+    })
+    observeEvent(input$heatmapPlotBt , {
         output$heatmap.plotting <- renderPlot({
-            data <- isolate({dmrdata()})
+
+            # get information from file
+            file  <- basename(as.character(parseFilePaths(volumes, input$heatmapresultsfile)$datapath))
+            if(length(file) > 0){
+                file <- unlist(str_split(file,"_"))
+                group1 <- file[4]
+                group2 <- file[5]
+            }
+            data <- isolate({heatmapdata()})
+            results.data <- isolate({heatmapresultdata()})
+
             colmdata <- isolate({input$colmetadataheatmap})
             rowmdata <- isolate({input$rowmetadataheatmap})
-            cluster_rows  <- isolate({input$heatmap.clusterrows})
+            cluster_rows <- isolate({input$heatmap.clusterrows})
             show_column_names <- isolate({input$heatmap.show.col.names})
             show_row_names <- isolate({input$heatmap.show.row.names})
-            cluster_columns  <- isolate({input$heatmap.clustercol})
-            sortCol  <- isolate({input$heatmapSortCol})
-            if(isolate({input$heatmapgroup1}) == "") {
-                group1 <- NULL
-            } else {
-                group1 <- isolate({input$heatmapgroup1})
+            cluster_columns <- isolate({input$heatmap.clustercol})
+            sortCol <- isolate({input$heatmapSortCol})
+            scale <- isolate({input$heatmapScale})
+
+            if( isolate({input$heatmapTypeInputRb}) == "met") type <-  "methylation"
+            if( isolate({input$heatmapTypeInputRb}) == "exp") type <-  "expression"
+
+            if(nchar(sortCol) ==0 &  isolate({input$heatmap.sortCb})){
+                createAlert(session, "heatmapmessage", "heatmapAlert", title = "Columns metadata", style =  "danger",
+                            content = paste0("Please select the heatmapSortCol"),append = FALSE)
+                return(NULL)
             }
 
-            if(isolate({input$heatmapgroup2}) == "") {
-                group2 <- NULL
+            if( isolate({input$heatmapTypeInputRb})=="met"){
+                # ---------------- probes selection
+                if(isolate({input$heatmapProbesInputRb}) == "Status"){
+                    sig.probes <- ""
+                    if(isolate({input$heatmap.hypoprobesCb})) sig.probes <- c("Hypomethylated")
+                    if(isolate({input$heatmap.hyperprobesCb})) sig.probes <- c("Hypermethylated",sig.probes)
+                    sig.probes <- paste(sig.probes,"in",group2)
+                    # Get hypo methylated and hypermethylated probes
+                    idx <- paste("status",group1,group2, sep=".")
+                    print(table(results.data[,idx]))
+                    probes <- results.data[,idx] %in% sig.probes
+                } else {
+                    sig.probes <- parse.textarea.input(isolate({input$heatmapProbesTextArea}))
+                    probes <- which(results.data$probeID %in% sig.probes)
+                }
+                data <- data[probes,]
+                results.data <- results.data[probes,]
             } else {
-                group2 <- isolate({input$heatmapgroup2})
+                if(isolate({input$heatmapGenesInputRb}) == "Status"){
+                    if(isolate({input$heatmap.upGenesCb})) sig.genes <- c("Upregulated")
+                    if(isolate({input$heatmap.downGenewsCb})) sig.genes <- c("Downregulated",sig.genes)
+                    sig.genes <- paste(sig.genes,"in",group2)
+                    # Get hypo methylated and hypermethylated probes
+                    genes <- results.data[,"status"] %in% sig.genes
+                } else {
+                    sig.genes <- parse.textarea.input(isolate({input$heatmapGenesTextArea}))
+                    aux <- strsplit(results.data$mRNA,"\\|")
+                    results.data$gene <- unlist(lapply(aux,function(x) x[2]))
+                    genes <- which(results.data$gene %in% sig.genes)
+                }
+
+                data <- data[genes,]
+                results.data <- results.data[genes,]
+
+            }
+            # ---------------- col.metadata
+            if(!("barcode" %in% colnames(colData(data)))){
+                createAlert(session, "heatmapmessage", "heatmapAlert", title = "Columns metadata", style =  "danger",
+                            content = paste0("Sorry, but I need a barcode column to map the Summarized Experiment object",append = FALSE))
+                return(NULL)
             }
 
-            # Get hypo methylated and hypermethylated probes
-            idx <- grep(paste("status",group1,group2, sep="."), colnames(values(data)))
-
-            if(isolate({input$heatmapInputRb}) == "Status"){
-                if(isolate({input$heatmap.hypoprobesCb})) sig.probes <- c("Hypomethylated")
-                if(isolate({input$heatmap.hyperprobesCb})) sig.probes <- c("Hypermethylated",sig.probes)
-                probes <- which(values(data)[,idx[1]] %in% sig.probes)
-            } else {
-                sig.probes <- parse.textarea.input(isolate({input$heatmapProbesTextArea}))
-                probes <- which(values(data)$probeID %in% sig.probes)
-            }
-            data <- data[probes,]
-
-            # col.metadata
             col.metadata <- NULL
-            print(colmdata)
             if(!is.null(colmdata)) {
-                if(length(colmdata) > 0) col.metadata <- subset(colData(data), select=c("patient",colmdata))
+                if(length(colmdata) > 0) col.metadata <- subset(colData(data), select=c("barcode",colmdata))
             }
-            # row.metadata
+
+            # ---------------- row.metadata
             row.metadata <- NULL
-            print(rowmdata)
             if(!is.null(rowmdata)) {
-                if(length(colmdata) > 0) row.metadata <- subset(values(data), select=c(rowmdata))
+                if(length(rowmdata) > 0) row.metadata <- subset(results.data, select=c(rowmdata))
             }
-            print(sortCol)
             withProgress(message = 'Creating plot',
                          detail = 'This may take a while...', value = 0, {
                              if(!isolate({input$heatmap.sortCb})) {
@@ -1160,7 +1740,8 @@ biOMICsServer <- function(input, output, session) {
                                                              show_column_names = show_column_names,
                                                              cluster_columns = cluster_columns,
                                                              show_row_names = show_row_names,
-                                                             type = "methylation")
+                                                             type = type,
+                                                             scale = scale)
                              } else {
                                  p <-  TCGAvisualize_Heatmap(data=assay(data),
                                                              col.metadata=col.metadata,
@@ -1171,27 +1752,28 @@ biOMICsServer <- function(input, output, session) {
                                                              cluster_columns = cluster_columns,
                                                              show_row_names = show_row_names,
                                                              sortCol = sortCol,
-                                                             type = "methylation")
+                                                             type = type,
+                                                             scale = scale)
                              }
                              incProgress(1/2)
                              ComplexHeatmap::draw(p)
                          })
         })})
 
-    observeEvent(input$heatmapPlot , {
-        updateCollapse(session, "collapseDmr", open = "DMR plots")
-        output$dmrPlot <- renderUI({
-            plotOutput("heatmap.plotting", width = paste0(isolate({input$meanmetwidth}), "%"), height = isolate({input$meanmetheight}))
+    observeEvent(input$heatmapPlotBt , {
+        updateCollapse(session, "collapseHeatmap", open = "Heatmap")
+        output$heatmapPlot <- renderUI({
+            plotOutput("heatmap.plotting", width = paste0(isolate({input$heatmapwidth}), "%"), height = isolate({input$heatmapheight}))
         })})
 
     observe({
-        data <- dmrdata()
+        data <- heatmapdata()
         updateSelectizeInput(session, 'colmetadataheatmap', choices = {
             if(!is.null(data)) as.character(colnames(colData(data)))
         }, server = TRUE)
     })
     observe({
-        data <- dmrdata()
+        data <- heatmapdata()
         updateSelectizeInput(session, 'rowmetadataheatmap', choices = {
             if(!is.null(data)) as.character(colnames(values(data)))
         }, server = TRUE)
@@ -1205,12 +1787,54 @@ biOMICsServer <- function(input, output, session) {
         if(input$tcgaEaInputRb == "text") {
             shinyjs::show("eaGenesTextArea")
             shinyjs::hide("eagenes")
+            shinyjs::hide("eaGenesFiles")
         } else if(input$tcgaEaInputRb == "Selection") {
             shinyjs::hide("eaGenesTextArea")
             shinyjs::show("eagenes")
+            shinyjs::hide("eaGenesFiles")
+        } else {
+            shinyjs::hide("eaGenesTextArea")
+            shinyjs::hide("eagenes")
+            shinyjs::show("eaGenesFiles")
         }
     })
     #----------------------- END controlling show/hide states -----------------
+    shinyFileChoose(input, 'eaGenesFiles', roots=volumes, session=session, restrictions=system.file(package='base'))
+    eaGenesByFile <- function(){
+        inFile <- input$eaGenesFiles
+        if (is.null(inFile)) return(NULL)
+        file  <- as.character(parseFilePaths(volumes, inFile)$datapath)
+        if(tools::file_ext(file)=="csv"){
+            df <- read.csv2(file,header = T,stringsAsFactors = FALSE)
+            rownames(df) <- df[,1]
+            df[,1] <- NULL
+        } else if(tools::file_ext(file)=="rda"){
+            df <- get(load(file))
+        } else if(tools::file_ext(file)=="txt"){
+            df <- read.table(file,header = T)
+        } else {
+            createAlert(session, "oncomessage", "oncoAlert", title = "Data input error", style =  "danger",
+                        content = paste0("Sorry, but I'm expecting a csv, rda or txt file, but I got a: ",
+                                         tools::file_ext(file)), append = FALSE)
+            return(NULL)
+        }
+        genes <- NULL
+        # if a data frame return the column with gene symbols
+        if(class(df)==class(data.frame())){
+            if("mRNA" %in% colnames(df)){
+                df <- subset(df,df$status != "Insignificant")
+                aux <- strsplit(df$mRNA,"\\|")
+                genes <- unlist(lapply(aux,function(x) x[1]))
+            } else if("Gene_symbol" %in% colnames(df)){
+                genes <- df$Gene_symbol
+            } else {
+                createAlert(session, "oncomessage", "oncoAlert", title = "Data input error", style =  "danger",
+                            content = paste0("Sorry, but I'm expecting a column called Gene_symbol "), append = FALSE)
+                return(NULL)
+            }
+        }
+        return(genes)
+    }
     observeEvent(input$eaplot , {
         updateCollapse(session, "collapseEA", open = "EA plots")
         output$eaPlot <- renderUI({
@@ -1230,13 +1854,21 @@ biOMICsServer <- function(input, output, session) {
                                 content = paste0("Sorry, I cant't find these genes: ", not.found), append = FALSE)
                     genes <-  genes[genes %in% TCGAbiolinks:::EAGenes$Gene]
                 }
-            } else {
+            } else if(isolate({input$tcgaEaInputRb}) == "Selection"){
                 genes <- isolate({input$eagenes})
+            } else{
+                genes <- eaGenesByFile()
+                not.found <- genes[!(genes %in% TCGAbiolinks:::EAGenes$Gene)]
+                if(length(not.found) > 0){
+                    createAlert(session, "oncomessage", "oncoAlert", title = "Data input error", style =  "danger",
+                                content = paste0("Sorry, I cant't find these genes: ", not.found), append = FALSE)
+                    genes <-  genes[genes %in% TCGAbiolinks:::EAGenes$Gene]
+                }
             }
 
             withProgress(message = 'Creating plot',
                          detail = 'This may take a while...', value = 0, {
-                             ansEA <- TCGAanalyze_EAcomplete(TFname="DEA genes Normal Vs Tumor", genes)
+                             ansEA <- TCGAanalyze_EAcomplete(TFname="DEA genes", genes)
 
                              ResMF <- NULL
                              ResBP <- NULL
@@ -1300,11 +1932,22 @@ biOMICsServer <- function(input, output, session) {
         inFile <- input$profileplotfile
         if (is.null(inFile)) return(NULL)
         file  <- as.character(parseFilePaths(volumes, inFile)$datapath)
-        df <- get(load(file))
+        if(tools::file_ext(file)=="csv"){
+            df <- read.csv2(file,header = T)
+            rownames(df) <- df[,1]
+            df[,1] <- NULL
+        } else if(tools::file_ext(file)=="rda"){
+            df <- get(load(file))
+        } else {
+            createAlert(session, "profileplotmessage", "profileplotAlert", title = "Data input error", style =  "danger",
+                        content = paste0("Sorry, but I'm expecting a csv or rda file, but I got a: ",
+                                         tools::file_ext(file)), append = FALSE)
+            return(NULL)
+        }
 
-        if (class(df) != class(data.frame())){
-            createAlert(session, "dmrmessage", "dmrAlert", title = "Data input error", style =  "danger",
-                        content = paste0("Sorry, but I'm expecting a data frameobject, but I got a: ",
+        if(class(df)!= class(data.frame())){
+            createAlert(session, "profileplotmessage", "profileplotAlert", title = "Data input error", style =  "danger",
+                        content = paste0("Sorry, but I'm expecting a Data frame object, but I got a: ",
                                          class(df)), append = FALSE)
             return(NULL)
         }
@@ -1353,6 +1996,28 @@ biOMICsServer <- function(input, output, session) {
             m3  <-  isolate({input$margin3})
             m4  <-  isolate({input$margin4})
 
+            if(is.null(data)){
+                closeAlert(session, "profileplotAlert")
+                createAlert(session, "profileplotmessage", "profileplotAlert", title = "Missing data", style =  "danger",
+                            content = paste0("Please select the data"), append = FALSE)
+                return(NULL)
+            }
+
+            if(is.null(groupCol) || nchar(groupCol) == 0){
+                closeAlert(session, "profileplotAlert")
+                createAlert(session, "profileplotmessage", "profileplotAlert", title = "Missing group selection", style =  "danger",
+                            content = paste0("Please select the group column"), append = FALSE)
+                return(NULL)
+            }
+
+            if(is.null(subtypeCol) || nchar(subtypeCol) == 0){
+                closeAlert(session, "profileplotAlert")
+                createAlert(session, "profileplotmessage", "profileplotAlert", title = "Missing subgroup selection", style =  "danger",
+                            content = paste0("Please select the subgroup column"), append = FALSE)
+                return(NULL)
+            }
+
+
             withProgress(message = 'Creating plot',
                          detail = 'This may take a while...', value = 0, {
 
@@ -1377,20 +2042,20 @@ biOMICsServer <- function(input, output, session) {
     # Survival plot
     # -----------------------------------------------
     #--------------------- START controlling show/hide states -----------------
-    shinyjs::hide("survivalplotgroup")
-    shinyjs::hide("survivalplotMain")
-    shinyjs::hide("survivalplotLegend")
-    shinyjs::hide("survivalplotLimit")
-    shinyjs::hide("survivalplotPvalue")
-    observeEvent(input$survivalplotfile, {
-        if(!is.null(survivalplotdata())){
-            shinyjs::show("survivalplotgroup")
-            shinyjs::show("survivalplotMain")
-            shinyjs::show("survivalplotLegend")
-            shinyjs::show("survivalplotLimit")
-            shinyjs::show("survivalplotPvalue")
-        }
-    })
+    #shinyjs::hide("survivalplotgroup")
+    #shinyjs::hide("survivalplotMain")
+    #shinyjs::hide("survivalplotLegend")
+    #shinyjs::hide("survivalplotLimit")
+    #shinyjs::hide("survivalplotPvalue")
+    #observeEvent(input$survivalplotfile, {
+    #    if(!is.null(survivalplotdata())){
+    #        shinyjs::show("survivalplotgroup")
+    #        shinyjs::show("survivalplotMain")
+    #        shinyjs::show("survivalplotLegend")
+    #        shinyjs::show("survivalplotLimit")
+    #        shinyjs::show("survivalplotPvalue")
+    #    }
+    #})
     #----------------------- END controlling show/hide states -----------------
     observe({
         data <- survivalplotdata()
@@ -1410,12 +2075,23 @@ biOMICsServer <- function(input, output, session) {
         inFile <- input$survivalplotfile
         if (is.null(inFile)) return(NULL)
         file  <- as.character(parseFilePaths(volumes, inFile)$datapath)
-        df <- get(load(file))
-
-        if (class(df) != class(data.frame())){
+        if(tools::file_ext(file)=="csv"){
+            df <- read.csv2(file,header = T)
+            rownames(df) <- df[,1]
+            df[,1] <- NULL
+        } else if(tools::file_ext(file)=="rda"){
+            df <- get(load(file))
+        } else {
             closeAlert(session, "survivalAlert")
             createAlert(session, "survivalmessage", "survivalAlert", title = "Data input error", style =  "danger",
-                        content = paste0("Sorry, but I'm expecting a data frame object, but I got a: ",
+                        content = paste0("Sorry, but I'm expecting a csv or rda file, but I got a: ",
+                                         tools::file_ext(file)), append = FALSE)
+            return(NULL)
+        }
+        if(class(df)!= class(data.frame())){
+            closeAlert(session, "survivalAlert")
+            createAlert(session, "survivalmessage", "survivalAlert", title = "Data input error", style =  "danger",
+                        content = paste0("Sorry, but I'm expecting a Data frame object, but I got a: ",
                                          class(df)), append = FALSE)
             return(NULL)
         }
@@ -1430,12 +2106,32 @@ biOMICsServer <- function(input, output, session) {
             clusterCol <-  isolate({input$survivalplotgroup})
             cut.off <- isolate({input$survivalplotLimit})
             print.pvalue <- isolate({input$survivalplotPvalue})
-            closeAlert(session, "survivalAlert")
+
+            #---------------------------
+            # Input verification
+            #---------------------------
+            if(is.null(data)){
+                closeAlert(session, "survivalAlert")
+                createAlert(session, "survivalmessage", "survivalAlert", title = "Missing data", style =  "danger",
+                            content = paste0("Please select the data"), append = FALSE)
+                return(NULL)
+            }
+
+            if(is.null(clusterCol) || nchar(clusterCol) == 0){
+                closeAlert(session, "survivalAlert")
+                createAlert(session, "survivalmessage", "survivalAlert", title = "Missing group", style =  "danger",
+                            content = paste0("Please select group column"), append = FALSE)
+                return(NULL)
+            }
+
             if(length(unique(data[,clusterCol])) == 1){
+                closeAlert(session, "survivalAlert")
                 createAlert(session, "survivalmessage", "survivalAlert", title = "Data input error", style =  "danger",
                             content = paste0("Sorry, but I'm expecting at least two groups"), append = FALSE)
                 return(NULL)
             }
+            #-=-=-=-=-=-=-=-=--==-=-=-=-=-=-=-=-=
+
             withProgress(message = 'Creating plot',
                          detail = 'This may take a while...', value = 0, {
 
@@ -1486,7 +2182,7 @@ biOMICsServer <- function(input, output, session) {
         method <- isolate({input$deamethod})
         fdr.cut <- isolate({input$deapvalue})
         logFC.cut <- isolate({input$deathrsld})
-        withProgress(message = 'dea analysis in progress',
+        withProgress(message = 'Differential Expression Analysis in progress',
                      detail = 'This may take a while...', value = 0, {
 
 
@@ -1517,14 +2213,16 @@ biOMICsServer <- function(input, output, session) {
                                                      TableCond1 = assay(se[,samples.g1]),
                                                      TableCond2 = assay(se[,samples.g2]))
                          exp$status <- "Insignificant"
-                         exp[exp$logFC >= logFC.cut & exp$FDR <= fdr.cut,"status"] <- paste0("Upregulated in ", g1)
-                         exp[exp$logFC <= -logFC.cut & exp$FDR <= fdr.cut,"status"] <- paste0("Downregulated in ", g1)
+                         exp[exp$logFC >= logFC.cut & exp$FDR <= fdr.cut,"status"] <- paste0("Upregulated in ", g2)
+                         exp[exp$logFC <= -logFC.cut & exp$FDR <= fdr.cut,"status"] <- paste0("Downregulated in ", g2)
                      })
 
-
-        save(exp, file = paste0("result_dea_", g1, "_", g2,".rda"))
+        out.filename <- paste0(paste("DEA_results",gsub("_",".",groupCol),
+                                     gsub("_",".",g1), gsub("_",".",g2),
+                                     "pcut",fdr.cut,"logFC.cut",logFC.cut,sep="_"),".csv")
+        write.csv2(exp, file = out.filename)
         createAlert(session, "deamessage", "deaAlert", title = "DEA completed", style =  "danger",
-                    content = paste0("Results saved in: result_dea_", g1, "_", g2,".rda"), append = FALSE)
+                    content = out.filename, append = FALSE)
     })
     shinyFileChoose(input, 'deafile', roots=volumes, session=session, restrictions=system.file(package='base'))
 
@@ -1564,46 +2262,7 @@ biOMICsServer <- function(input, output, session) {
         }, server = TRUE)
     })
 
-    observeEvent(input$volcanodeaPlot , {
-        output$volcano.dea.plot <- renderPlot({
-            g1 <- isolate({input$deagroup1})
-            g2 <- isolate({input$deagroup2})
-            fdr.cut <- isolate({input$deapvalue})
-            logFC.cut <- isolate({input$deathrsld})
-            dea.result <- get(load( paste0("result_dea_", g1, "_", g2,".rda")))
 
-            label <- c("Not Significant",
-                       "Upregulated",
-                       "Downregulated")
-            label[2:3] <-  paste(label[2:3], "in", g2)
-
-
-            withProgress(message = 'Creating plot',
-                         detail = 'This may take a while...', value = 0, {
-                             TCGAVisualize_volcano(x = dea.result$logFC,
-                                                   y = dea.result$FDR,
-                                                   ylab =   expression(paste(-Log[10],
-                                                                             " (FDR corrected -P values)")),
-                                                   xlab = " Gene expression fold change (Log2)",
-                                                   color = c(isolate({input$coldeainsignificant}),
-                                                             isolate({input$colUpregulated}),
-                                                             isolate({input$colDownregulated})),
-                                                   title =  paste("Volcano plot", "(", g2, "vs", g1,")"),
-                                                   legend=  "Legend",
-                                                   label = label,
-                                                   names = NULL,
-                                                   x.cut = isolate({as.numeric(input$deathrsld)}),
-                                                   y.cut = isolate({as.numeric(input$deapvalue)}),
-                                                   filename = NULL)
-                         })
-
-        })})
-
-    observeEvent(input$volcanodeaPlot , {
-        updateCollapse(session, "collapsedea", open = "dea plots")
-        output$deaPlot <- renderUI({
-            plotOutput("volcano.dea.plot", width = paste0(isolate({input$deawidth}), "%"), height = isolate({input$deaheight}))
-        })})
 
     output$deaSE <- renderDataTable({
         data <- deadata()
@@ -1632,14 +2291,27 @@ biOMICsServer <- function(input, output, session) {
 
     #----------------------------------------------
     #                 DEA Pathview
+    pathway.data <- function(){
+        inFile <- input$pathewayexpfile
+        if (is.null(inFile)) return(NULL)
+        file  <- as.character(parseFilePaths(volumes, input$pathewayexpfile)$datapath)
+        if(tools::file_ext(file)=="csv"){
+            se <- read.csv2(file,header = TRUE, stringsAsFactors = FALSE)
+        } else if(tools::file_ext(file)=="rda"){
+            se <- get(load(file))
+        }
+
+        return(se)
+    }
+    shinyFileChoose(input, 'pathewayexpfile', roots=volumes, session=session, restrictions=system.file(package='base'))
+
     observeEvent(input$pathwaygraphBt , {
 
+        data <- pathway.data()
         pathway.id <- isolate({input$pathway.id})
         kegg.native <- isolate({input$kegg.native.checkbt})
-        g1 <- isolate({input$deagroup1})
-        g2 <- isolate({input$deagroup2})
-        data <- get(load( paste0("result_dea_", g1, "_", g2,".rda")))
 
+        print(head(data))
         gene <- strsplit(data$mRNA,"\\|")
         data$SYMBOL <- unlist(lapply(gene,function(x) x[1]))
 
@@ -1658,7 +2330,6 @@ biOMICsServer <- function(input, output, session) {
         names(genelistDEGs) <- data$ENTREZID
         withProgress(message = 'Creating pathway graph',
                      detail = 'This may take a while...', value = 0, {
-                         require("pathview")
                          # pathway.id: hsa05214 is the glioma pathway
                          # limit: sets the limit for gene expression legend and color
                          hsa05214 <- pathview(gene.data  = genelistDEGs,
@@ -1673,19 +2344,60 @@ biOMICsServer <- function(input, output, session) {
             extension <- ".pathview.pdf"
         }
 
-        createAlert(session, "deamessage", "deaAlert", title = "Pathway graph created", style =  "active",
+        createAlert(session, "deamessage", "deaAlert", title = "Pathway graph created", style =  "success",
                     content = paste0("Results saved in: ", pathway.id,extension), append = FALSE)
 
     })
-    #----------------------------------------------
+
+    #------------------------------------------------
+    # Starburst
+    # -----------------------------------------------
     observeEvent(input$starburstNames, {
         toggle("starburstNamesFill")
     })
 
+    # get DMR result name and update the mean cut and pcut
+    observeEvent(input$starburstmetfile, {
+        file  <- basename(as.character(parseFilePaths(volumes, input$starburstmetfile)$datapath))
+        if(length(file) > 0){
+            file <- unlist(str_split(file,"_"))
+            group1 <- file[4]
+            group2 <- file[5]
+            pcut <- file[7]
+            meancut <- gsub(".csv","",file[9])
+            updateNumericInput(session, "starburstmetdiff", value = meancut)
+            updateNumericInput(session, "starburstmetFDR", value = pcut)
+        }
+    })
 
+    # get DEA result name and update the mean cut and pcut
+    observeEvent(input$starburstexpfile, {
+        file  <- basename(as.character(parseFilePaths(volumes, input$starburstexpfile)$datapath))
+        if(length(file) > 0){
+            file <- unlist(str_split(file,"_"))
+            group1 <- file[4]
+            group2 <- file[5]
+            pcut <- file[7]
+            fccut <- gsub(".csv","",file[9])
+            updateNumericInput(session, "starburstexpFC", value = fccut)
+            updateNumericInput(session, "starburstexFDR", value = pcut)
+        }
+    })
+
+    # Main function
     starburst <- function(){
-        g1 <- isolate({input$starburstgroup1})
-        g2 <- isolate({input$starburstgroup2})
+
+        closeAlert(session,"starburstAlert")
+        if(is.null(result.dea.data())){
+            createAlert(session, "starburstmessage", "starburstAlert", title = "Missing data", style =  "danger",
+                        content = paste0("Please select the differential expression results"), append = FALSE)
+            return(NULL)
+        }
+        if(is.null(result.dmr.data())){
+            createAlert(session, "starburstmessage", "starburstAlert", title = "Missing data", style =  "danger",
+                        content = paste0("Please select the differential DNA methylation results"), append = FALSE)
+            return(NULL)
+        }
         logFC.cut <- isolate({input$starburstexpFC})
         exp.p.cut <- isolate({input$starburstexFDR})
         diffmean.cut <- isolate({input$starburstmetdiff})
@@ -1703,25 +2415,58 @@ biOMICsServer <- function(input, output, session) {
                     isolate({input$sbcolDown}),
                     isolate({input$sbcolUpHyper}),
                     isolate({input$sbcolDownHyper}))
-        result <- TCGAvisualize_starburst(met = met,
-                                          exp = exp,
-                                          group1 = g1,
-                                          group2 = g2,
-                                          color = colors,
-                                          names = names,
-                                          names.fill = names.fill,
-                                          exp.p.cut = exp.p.cut,
-                                          met.p.cut = met.p.cut,
-                                          diffmean.cut = diffmean.cut,
-                                          logFC.cut = logFC.cut,
-                                          return.plot = TRUE)
+
+
+        file  <- basename(as.character(parseFilePaths(volumes, isolate({input$starburstmetfile}))$datapath))
+        if(length(file) > 0){
+            file <- unlist(str_split(file,"_"))
+            group1 <- file[4]
+            group2 <- file[5]
+        }
+        file  <- basename(as.character(parseFilePaths(volumes, isolate({input$starburstexpfile}))$datapath))
+        if(length(file) > 0){
+            file <- unlist(str_split(file,"_"))
+            exp.group1 <- file[4]
+            exp.group2 <- file[5]
+        }
+
+        if(group1 == exp.group1 & group2 == exp.group2){
+
+            result <- TCGAvisualize_starburst(met = met,
+                                              exp = exp,
+                                              group1 = group1,
+                                              group2 = group2,
+                                              color = colors,
+                                              names = names,
+                                              names.fill = names.fill,
+                                              exp.p.cut = exp.p.cut,
+                                              met.p.cut = met.p.cut,
+                                              diffmean.cut = diffmean.cut,
+                                              circle = isolate({input$starburstCircle}),
+                                              logFC.cut = logFC.cut,
+                                              return.plot = TRUE)
+            out.filename <- paste0(paste("Starburst_results", group1, group2,
+                                         "exp.p.cut", exp.p.cut, "logFC.cut", logFC.cut,
+                                         "met.diffmean", diffmean.cut, "met.p.cut", met.p.cut,
+                                         sep = "_"),".csv")
+            if(isolate({input$starburstSave})) {
+                write.csv2(result$starburst, file = out.filename)
+                createAlert(session, "starburstmessage", "starburstAlert", title = "Results saved", style =  "info",
+                            content = paste0("Results saved in: ", out.filename), append = FALSE)
+            }
+            return(result)
+        }
     }
     # -------------- Starburst plot
     observeEvent(input$starburstPlot , {
+        # validate input
         output$starburst.plot <- renderPlot({
             withProgress(message = 'Creating plot',
                          detail = 'This may take a while...', value = 0, {
-                             starburst()$plot
+                             aux <- starburst()
+                             if(!is.null(aux)) {
+                                 return(aux$plot)
+                             }
                          })
         })})
 
@@ -1730,28 +2475,19 @@ biOMICsServer <- function(input, output, session) {
         output$starburstPlot <- renderUI({
             plotOutput("starburst.plot", width = paste0(isolate({input$starburstwidth}), "%"), height = isolate({input$starburstheight}))
         })})
-    observe({
-        updateSelectizeInput(session, 'starburstgroup1', choices = {
-            if(!is.null(result.dea.data())) {
-                x <- as.character(colnames(result.dea.data()))
-                x[-which(x %in% c("mRNA", "logFC","FDR", "Delta","status"))]
-            }
-        }, server = TRUE)
-    })
-    observe({
-        updateSelectizeInput(session, 'starburstgroup2', choices = {
-            if(!is.null(result.dea.data())) {
-                x <- as.character(colnames(result.dea.data()))
-                x[-which(x %in% c("mRNA", "logFC","FDR", "Delta","status"))]
-            }
-        }, server = TRUE)
-    })
+
+    # Starburst plot input data
     result.dea.data <- function(){
         inFile <- input$starburstexpfile
         if (is.null(inFile)) return(NULL)
         file  <- as.character(parseFilePaths(volumes, input$starburstexpfile)$datapath)
-        se <- get(load(file))
-
+        if(tools::file_ext(file)=="csv"){
+            se <- read.csv2(file,header = T)
+            rownames(se) <- se[,1]
+            se[,1] <- NULL
+        } else if(tools::file_ext(file)=="rda"){
+            se <- get(load(file))
+        }
         if(class(se)!= class(data.frame())){
             createAlert(session, "deamessage", "deaAlert", title = "Data input error", style =  "danger",
                         content = paste0("Sorry, but I'm expecting a Data frame object, but I got a: ",
@@ -1764,14 +2500,18 @@ biOMICsServer <- function(input, output, session) {
         inFile <- input$starburstmetfile
         if (is.null(inFile)) return(NULL)
         file  <- as.character(parseFilePaths(volumes, input$starburstmetfile)$datapath)
-        se <- get(load(file))
-
-        if(class(se)!= class(as(SummarizedExperiment(),"RangedSummarizedExperiment"))){
-            createAlert(session, "deamessage", "deaAlert", title = "Data input error", style =  "danger",
-                        content = paste0("Sorry, but I'm expecting a Summarized Experiment object, but I got a: ",
-                                         class(se)), append = FALSE)
-            return(NULL)
+        if(tools::file_ext(file)=="csv"){
+            se <- read.csv2(file,header = T)
+        } else if(tools::file_ext(file)=="rda"){
+            se <- get(load(file))
         }
+
+        #if(class(se)!= class(as(SummarizedExperiment(),"RangedSummarizedExperiment"))){
+        #    createAlert(session, "deamessage", "deaAlert", title = "Data input error", style =  "danger",
+        #                content = paste0("Sorry, but I'm expecting a Summarized Experiment object, but I got a: ",
+        #                                 class(se)), append = FALSE)
+        #    return(NULL)
+        #}
         return(se)
     }
     shinyFileChoose(input, 'starburstmetfile', roots=volumes, session=session, restrictions=system.file(package='base'))
@@ -1779,8 +2519,9 @@ biOMICsServer <- function(input, output, session) {
 
 
     output$starburstResult <- renderDataTable({
-        data <- starburst()$starburst
-        if(!is.null(data)) as.data.frame(data)
+
+        data <- starburst()
+        if(!is.null(data)) return(as.data.frame(data$starburst))
     },
     options = list(pageLength = 10,
                    scrollX = TRUE,
@@ -1802,5 +2543,580 @@ biOMICsServer <- function(input, output, session) {
                    )
     ), callback = "function(table) {table.on('click.dt', 'tr', function() {Shiny.onInputChange('allRows',table.rows('.selected').data().toArray());});}"
     )
+
+    #------------------------------------------------
+    # ELMER
+    # -----------------------------------------------
+    #--------------------- START controlling show/hide states -----------------
+    #shinyjs::hide("survivalplotgroup")
+    #shinyjs::hide("survivalplotMain")
+    #shinyjs::hide("survivalplotLegend")
+    #shinyjs::hide("survivalplotLimit")
+    #shinyjs::hide("survivalplotPvalue")
+    observeEvent(input$scatter.plot.type, {
+        type <- isolate({input$elmerPlotType})
+        if(type =="scatter.plot"){
+            scatter.type <- isolate({input$scatter.plot.type})
+            if(scatter.type == "tf"){
+                shinyjs::show("scatter.plot.tf")
+                shinyjs::show("scatter.plot.motif")
+                shinyjs::hide("scatter.plot.genes")
+                shinyjs::hide("scatter.plot.probes")
+                shinyjs::hide("scatter.plot.nb.genes")
+            } else if(scatter.type == "pair"){
+                shinyjs::hide("scatter.plot.tf")
+                shinyjs::hide("scatter.plot.motif")
+                shinyjs::show("scatter.plot.genes")
+                shinyjs::show("scatter.plot.probes")
+                shinyjs::hide("scatter.plot.nb.genes")
+            } else {
+                shinyjs::hide("scatter.plot.tf")
+                shinyjs::hide("scatter.plot.motif")
+                shinyjs::hide("scatter.plot.genes")
+                shinyjs::show("scatter.plot.probes")
+                shinyjs::show("scatter.plot.nb.genes")
+            }
+        }
+    })
+    observeEvent(input$elmerPlotType, {
+        type <- isolate({input$elmerPlotType})
+        if(type =="scatter.plot"){
+            shinyjs::show("scatter.plot.type")
+            shinyjs::hide("schematic.plot.type")
+            shinyjs::hide("schematic.plot.genes")
+            shinyjs::hide("schematic.plot.probes")
+            shinyjs::hide("ranking.plot.motif")
+            shinyjs::hide("ranking.plot.tf")
+            scatter.type <- isolate({input$scatter.plot.type})
+            if(scatter.type == "tf"){
+                shinyjs::show("scatter.plot.tf")
+                shinyjs::show("scatter.plot.motif")
+                shinyjs::hide("scatter.plot.genes")
+                shinyjs::hide("scatter.plot.probes")
+                shinyjs::hide("scatter.plot.nb.genes")
+            } else if(scatter.type == "pair"){
+                shinyjs::hide("scatter.plot.tf")
+                shinyjs::hide("scatter.plot.motif")
+                shinyjs::show("scatter.plot.genes")
+                shinyjs::show("scatter.plot.probes")
+                shinyjs::hide("scatter.plot.nb.genes")
+            } else {
+                shinyjs::hide("scatter.plot.tf")
+                shinyjs::hide("scatter.plot.motif")
+                shinyjs::hide("scatter.plot.genes")
+                shinyjs::show("scatter.plot.probes")
+                shinyjs::show("scatter.plot.nb.genes")
+            }
+        } else if(type =="schematic.plot"){
+            shinyjs::hide("scatter.plot.type")
+            shinyjs::hide("scatter.plot.tf")
+            shinyjs::hide("scatter.plot.motif")
+            shinyjs::hide("scatter.plot.genes")
+            shinyjs::hide("scatter.plot.probes")
+            shinyjs::hide("scatter.plot.nb.genes")
+            shinyjs::show("schematic.plot.type")
+            shinyjs::hide("ranking.plot.motif")
+            shinyjs::hide("ranking.plot.tf")
+            type <- isolate({input$schematic.plot.type})
+            if(type =="genes"){
+                shinyjs::hide("schematic.plot.probes")
+                shinyjs::show("schematic.plot.genes")
+            } else {
+                shinyjs::show("schematic.plot.probes")
+                shinyjs::hide("schematic.plot.genes")
+            }
+        } else if(type =="ranking.plot"){
+            shinyjs::hide("scatter.plot.type")
+            shinyjs::hide("scatter.plot.tf")
+            shinyjs::hide("scatter.plot.motif")
+            shinyjs::hide("scatter.plot.genes")
+            shinyjs::hide("scatter.plot.probes")
+            shinyjs::hide("scatter.plot.nb.genes")
+            shinyjs::hide("schematic.plot.type")
+            shinyjs::hide("schematic.plot.genes")
+            shinyjs::hide("schematic.plot.probes")
+            shinyjs::show("ranking.plot.motif")
+            shinyjs::show("ranking.plot.tf")
+        } else if(type =="motif.enrichment.plot"){
+            shinyjs::hide("scatter.plot.type")
+            shinyjs::hide("scatter.plot.tf")
+            shinyjs::hide("scatter.plot.motif")
+            shinyjs::hide("scatter.plot.genes")
+            shinyjs::hide("scatter.plot.probes")
+            shinyjs::hide("scatter.plot.nb.genes")
+            shinyjs::hide("schematic.plot.type")
+            shinyjs::hide("schematic.plot.genes")
+            shinyjs::hide("schematic.plot.probes")
+            shinyjs::hide("ranking.plot.motif")
+            shinyjs::hide("ranking.plot.tf")
+        }
+    })
+
+    observeEvent(input$schematic.plot.type, {
+        type <- isolate({input$elmerPlotType})
+        if(type =="schematic.plot"){
+            type <- isolate({input$schematic.plot.type})
+            if(type =="genes"){
+                shinyjs::hide("schematic.plot.probes")
+                shinyjs::show("schematic.plot.genes")
+            } else {
+                shinyjs::show("schematic.plot.probes")
+                shinyjs::hide("schematic.plot.genes")
+            }
+        }
+    })
+    #----------------------- END controlling show/hide states -----------------
+    shinyDirChoose(input, 'elmerFolder', roots=volumes, session=session, restrictions=system.file(package='base'))
+    shinyFileChoose(input, 'elmermeefile', roots=volumes, session=session, restrictions=system.file(package='base'))
+    shinyFileChoose(input, 'elmerresultsfile', roots=volumes, session=session, restrictions=system.file(package='base'))
+    shinyFileChoose(input, 'elmermetfile', roots=volumes, session=session, restrictions=system.file(package='base'))
+    shinyFileChoose(input, 'elmerexpfile', roots=volumes, session=session, restrictions=system.file(package='base'))
+
+    # mee create
+    observe({
+        data.met <- mee.met()
+        updateSelectizeInput(session, 'elmermeetype', choices = {
+            if(!is.null(data.met)) as.character(colnames(colData(data.met)))
+        }, server = TRUE)
+    })
+    observeEvent(input$elmermeetype, {
+        data.met <- mee.met()
+        updateSelectizeInput(session, 'elmermeesubtype', choices = {
+            if(!is.null(data.met)) as.character(unique(colData(data.met)[,input$elmermeetype]))
+        }, server = TRUE)
+    })
+    observeEvent(input$elmermeetype, {
+        data.met <- mee.met()
+        updateSelectizeInput(session, 'elmermeesubtype2', choices = {
+            if(!is.null(data.met)) as.character(unique(colData(data.met)[,input$elmermeetype]))
+        }, server = TRUE)
+    })
+
+    mee.exp <-  reactive({
+        inFile <- input$elmerexpfile
+        if (is.null(inFile)) return(NULL)
+        file  <- as.character(parseFilePaths(volumes, inFile)$datapath)
+
+        withProgress(message = 'Loading data',
+                     detail = 'This may take a while...', value = 0, {
+                         exp <- get(load(file))
+                     })
+        return(exp)
+    })
+    mee.met <-  reactive({
+        inFile <- input$elmermetfile
+        if (is.null(inFile)) return(NULL)
+        file  <- as.character(parseFilePaths(volumes, inFile)$datapath)
+
+        withProgress(message = 'Loading data',
+                     detail = 'This may take a while...', value = 0, {
+                         met <- get(load(file))
+                     })
+        return(met)
+    })
+
+
+    observeEvent(input$elmerpreparemee, {
+        exp.elmer <- mee.exp()
+        met.elmer <- mee.met()
+        column <- isolate({input$elmermeetype})
+        subtype1 <-  isolate({input$elmermeesubtype})
+        subtype2 <-  isolate({input$elmermeesubtype2})
+
+        if(is.null(column)){
+            closeAlert(session, "elmerAlert")
+            createAlert(session, "elmermessage", "elmerAlert", title = "Type missing", style =  "danger",
+                        content =   "Please select the column with type", append = TRUE)
+            return(NULL)
+        }
+        if(is.null(subtype1) | is.null(subtype2)){
+            closeAlert(session, "elmerAlert")
+            createAlert(session, "elmermessage", "elmerAlert", title = "Subtype missing", style =  "danger",
+                        content =   "Please select the two subtypes", append = TRUE)
+            return(NULL)
+        }
+        if(is.null(exp.elmer) | is.null(met.elmer)){
+            closeAlert(session, "elmerAlert")
+            createAlert(session, "elmermessage", "elmerAlert", title = "Subtype missing", style =  "danger",
+                        content =   "Please upload the two summarized Experiment objects", append = TRUE)
+            return(NULL)
+        }
+
+
+        # Data: get only samples of subtype1 and subtype2
+        exp.elmer <- subset(exp.elmer, select=(colData(exp.elmer)[,column] %in% c(subtype1,subtype2)))
+        met.elmer <- subset(met.elmer, select=(colData(met.elmer)[,column] %in%  c(subtype1,subtype2)))
+
+        # Get barcodes for subtype1
+        sample.info <-  colData(exp.elmer)
+        samples <- sample.info[sample.info[,column] == isolate({input$elmermeesubtype2}),]$barcode
+        withProgress(message = 'Creating mee data',
+                     detail = 'This may take a while...', value = 0, {
+
+                         exp.elmer <- TCGAprepare_elmer(exp.elmer, platform = "IlluminaHiSeq_RNASeqV2",save = FALSE)
+                         incProgress(1/5, detail = paste0('Expression preparation is done'))
+
+                         met.elmer <- TCGAprepare_elmer(met.elmer, platform = "HumanMethylation450",met.na.cut = isolate({input$elmermetnacut}), save = FALSE)
+                         incProgress(1/5, detail = paste0('Methylation preparation is done'))
+
+                         geneAnnot <- txs()
+                         geneAnnot$GENEID <- paste0("ID",geneAnnot$GENEID)
+                         geneInfo <- promoters(geneAnnot,upstream = 0, downstream = 0)
+                         probe <- get.feature.probe()
+
+                         # create mee object, use @ to access the matrices inside the object
+                         mee <- fetch.mee(meth = met.elmer, exp = exp.elmer, TCGA = TRUE, probeInfo = probe, geneInfo = geneInfo)
+                         incProgress(1/5, detail = paste0('Mee is done'))
+
+                         # Relabel samples in the mee object: subtype1 is control
+                         mee@sample$TN[mee@sample$ID %in% substr(samples,1,15)] <- "Control"
+                         save(mee,file = paste0("mee_",column,"_",subtype1,"_",subtype2,".rda"))
+                         incProgress(2/5, detail = paste0('Saving is done'))
+                         createAlert(session, "elmermessage", "elmerAlert", title = "Mee created", style =  "success",
+                                     content =   paste0("Mee file created: mee_",column,"_",subtype1,"_",subtype2,".rda"), append = TRUE)
+                     })
+    })
+    # Input data
+    elmer.results.data <-  reactive({
+        inFile <- input$elmerresultsfile
+        if (is.null(inFile)) return(NULL)
+        file  <- as.character(parseFilePaths(volumes, inFile)$datapath)
+
+        withProgress(message = 'Loading data',
+                     detail = 'This may take a while...', value = 0, {
+                         load(file,envir = globalenv())
+                     })
+    })
+
+    meedata <-  reactive({
+        inFile <- input$elmermeefile
+        if (is.null(inFile)) return(NULL)
+        file  <- as.character(parseFilePaths(volumes, inFile)$datapath)
+
+        withProgress(message = 'Loading data',
+                     detail = 'This may take a while...', value = 0, {
+                         mee <- get(load(file))
+                     })
+        return(mee)
+    })
+
+    # Updates based on uploaded data
+    observe({
+        updateSelectizeInput(session, 'scatter.plot.probes', choices = {
+            if(!is.null(elmer.results.data())) as.character(Sig.probes$probe)
+        }, server = TRUE)
+    })
+    observe({
+        updateSelectizeInput(session, 'scatter.plot.tf', choices = {
+            if(!is.null(elmer.results.data())) as.character(rownames(TF.meth.cor))
+        }, server = TRUE)
+    })
+    observe({
+        updateSelectizeInput(session, 'scatter.plot.motif', choices = {
+            if(!is.null(elmer.results.data())) as.character(names(enriched.motif))
+        }, server = TRUE)
+    })
+
+    observeEvent(input$scatter.plot.probes, {
+        updateSelectizeInput(session, 'scatter.plot.genes', choices = {
+            if(!is.null(elmer.results.data())) as.character(nearGenes[[input$scatter.plot.probes]]$GeneID)
+        }, server = TRUE)
+    })
+
+    observe({
+        updateSelectizeInput(session, 'ranking.plot.tf', choices = {
+            if(!is.null(elmer.results.data())) as.character(rownames(TF.meth.cor))
+        }, server = TRUE)
+    })
+
+    observe({
+        updateSelectizeInput(session, 'ranking.plot.motif', choices = {
+            if(!is.null(elmer.results.data())) as.character(colnames(TF.meth.cor))
+        }, server = TRUE)
+    })
+
+    observe({
+        updateSelectizeInput(session, 'schematic.plot.probes', choices = {
+            mee <- meedata()
+            if(!is.null(elmer.results.data()) & !is.null(mee)){
+                pair.obj <- fetch.pair(pair=pair,
+                                       probeInfo = getProbeInfo(mee),
+                                       geneInfo = getGeneInfo(mee))
+                as.character(pair.obj@pairInfo$Probe)
+            }
+        }, server = TRUE)
+    })
+    observe({
+        updateSelectizeInput(session, 'schematic.plot.genes', choices = {
+            mee <- meedata()
+            if(!is.null(elmer.results.data()) & !is.null(mee)){
+                pair.obj <- fetch.pair(pair=pair,
+                                       probeInfo = getProbeInfo(mee),
+                                       geneInfo = getGeneInfo(mee))
+
+                as.character(pair.obj@pairInfo$GeneID)
+            }
+        }, server = TRUE)
+    })
+    observeEvent(input$elmerAnalysisBt, {
+        getPath <- parseDirPath(volumes, isolate({input$elmerFolder}))
+        mee <- meedata()
+        if(is.null(mee)){
+            closeAlert(session, "elmerAlert")
+            createAlert(session, "elmermessage", "elmerAlert", title = "Mee object missing", style =  "success",
+                        content =   "Please upload the mee object for this plot", append = TRUE)
+            return(NULL)
+        }
+        library(parallel)
+        direction <- c("hyper","hypo")
+
+        for (j in direction){
+            withProgress(message = 'ELMER analysis',
+                         detail = paste0('Direction: ',j), value = 0, {
+                             print(j)
+                             dir.out <- paste0(getPath,"/elmer/",j)
+                             dir.create(dir.out, recursive = TRUE)
+                             #--------------------------------------
+                             # STEP 3: Analysis                     |
+                             #--------------------------------------
+                             # Step 3.1: Get diff methylated probes |
+                             #--------------------------------------
+                             Sig.probes <- get.diff.meth(mee,
+                                                         cores=isolate({input$elmercores}),
+                                                         dir.out =dir.out,
+                                                         diff.dir=j,
+                                                         pvalue = isolate({input$elmermetpvalue}))
+
+                             #-------------------------------------------------------------
+                             # Step 3.2: Identify significant probe-gene pairs            |
+                             #-------------------------------------------------------------
+                             # Collect nearby 20 genes for Sig.probes
+                             nearGenes <- GetNearGenes(TRange=getProbeInfo(mee, probe=Sig.probes$probe),
+                                                       cores=isolate({input$elmercores}),
+                                                       geneAnnot=getGeneInfo(mee),
+                                                       geneNum = isolate({input$elmergetpairNumGenes}))
+
+                             pair <- get.pair(mee=mee,
+                                              probes=Sig.probes$probe,
+                                              nearGenes=nearGenes,
+                                              permu.dir=paste0(dir.out,"/permu"),
+                                              dir.out=dir.out,
+                                              cores=isolate({input$elmercores}),
+                                              label= j,
+                                              permu.size=isolate({input$elmergetpairpermu}),
+                                              Pe = isolate({input$elmergetpairpvalue}),
+                                              percentage =  isolate({input$elmergetpairpercentage}),
+                                              portion = isolate({input$elmergetpairportion}),
+                                              diffExp = isolate({input$elmergetpairdiffExp}))
+
+                             Sig.probes.paired <- fetch.pair(pair=pair,
+                                                             probeInfo = getProbeInfo(mee),
+                                                             geneInfo = getGeneInfo(mee))
+
+                             Sig.probes.paired <- read.csv(paste0(dir.out,"/getPair.",j,".pairs.significant.csv"),
+                                                           stringsAsFactors=FALSE)[,1]
+
+                             #-------------------------------------------------------------
+                             # Step 3.3: Motif enrichment analysis on the selected probes |
+                             #-------------------------------------------------------------
+                             if(length(Sig.probes.paired) > 0 ){
+                                 #-------------------------------------------------------------
+                                 # Step 3.3: Motif enrichment analysis on the selected probes |
+                                 #-------------------------------------------------------------
+                                 probe <- get.feature.probe()
+                                 enriched.motif <- get.enriched.motif(probes = Sig.probes.paired,
+                                                                      dir.out = dir.out,
+                                                                      label = j,
+                                                                      background.probes = probe$name,
+                                                                      lower.OR =  isolate({input$elmergetenrichedmotifLoweOR}),
+                                                                      min.incidence = isolate({input$elmergetenrichedmotifMinIncidence}))
+                                 motif.enrichment <- read.csv(paste0(dir.out,"/getMotif.",j,".motif.enrichment.csv"),
+                                                              stringsAsFactors=FALSE)
+                                 if(length(enriched.motif) > 0){
+                                     #-------------------------------------------------------------
+                                     # Step 3.4: Identifying regulatory TFs                        |
+                                     #-------------------------------------------------------------
+                                     print("get.TFs")
+
+                                     TF <- get.TFs(mee = mee,
+                                                   enriched.motif = enriched.motif,
+                                                   dir.out = dir.out,
+                                                   cores = isolate({input$elmercores}),
+                                                   label = j,
+                                                   percentage = isolate({input$elmergetTFpercentage}))
+                                     TF.meth.cor <- get(load(paste0(dir.out,"/getTF.",j,".TFs.with.motif.pvalue.rda")))
+                                     save(TF, enriched.motif, Sig.probes.paired,
+                                          pair, nearGenes, Sig.probes, motif.enrichment, TF.meth.cor,
+                                          file=paste0(dir.out,"/ELMER_results_",j,".rda"))
+                                 }
+                             }
+                             incProgress(1/2, detail = paste0('Analysis in direction completed: ',j))
+                         })
+        }
+    })
+
+    observeEvent(input$elmerPlotBt , {
+        output$elmer.plot <- renderPlot({
+            plot.type <- isolate({input$elmerPlotType})
+            mee <- meedata()
+            closeAlert(session, "elmerAlert")
+
+            # Three types:
+            # 1 - TF expression vs average DNA methylation
+            # 2 - Generate a scatter plot for one probe-gene pair
+            # 3 - Generate scatter plots for one probes’ nearby 20 gene expression
+            #     vs DNA methylation at this probe
+            if(plot.type == "scatter.plot"){
+                if(is.null(mee)){
+                    createAlert(session, "elmermessage", "elmerAlert", title = "Mee object missing", style =  "success",
+                                content =   "Please upload the mee object for this plot", append = TRUE)
+                    return(NULL)
+                }
+                # case 1
+                plot.by <- isolate({input$scatter.plot.type})
+                if(plot.by == "tf"){
+                    if(is.null(isolate({input$scatter.plot.tf}))){
+                        closeAlert(session, "elmerAlert")
+                        createAlert(session, "elmermessage", "elmerAlert", title = "TFs missing", style =  "success",
+                                    content = "Please select two TF", append = TRUE)
+                        return(NULL)
+                    }
+
+                    if(nchar(isolate({input$scatter.plot.tf})) == 0 | length(isolate({input$scatter.plot.tf})) < 2){
+                        closeAlert(session, "elmerAlert")
+                        createAlert(session, "elmermessage", "elmerAlert", title = "TFs missing", style =  "success",
+                                    content =   "Please select two TF", append = TRUE)
+                        return(NULL)
+                    }
+                    if(nchar(isolate({input$scatter.plot.motif})) == 0){
+                        closeAlert(session, "elmerAlert")
+                        createAlert(session, "elmermessage", "elmerAlert", title = "Motif missing", style =  "success",
+                                    content =   "Please select a motif", append = TRUE)
+                        return(NULL)
+                    }
+                    scatter.plot(mee,byTF=list(TF=isolate({input$scatter.plot.tf}),
+                                               probe=enriched.motif[[isolate({input$scatter.plot.motif})]]), category="TN",
+                                 save=FALSE,lm_line=TRUE)
+                } else if(plot.by == "pair") {
+                    if(nchar(isolate({input$scatter.plot.probes})) == 0){
+                        closeAlert(session, "elmerAlert")
+                        createAlert(session, "elmermessage", "elmerAlert", title = "Probe missing", style =  "success",
+                                    content =   "Please select a probe", append = TRUE)
+                        return(NULL)
+                    }
+                    if(nchar(isolate({input$scatter.plot.genes})) == 0){
+                        closeAlert(session, "elmerAlert")
+                        createAlert(session, "elmermessage", "elmerAlert", title = "Gene missing", style =  "success",
+                                    content =   "Please select a gene", append = TRUE)
+                        return(NULL)
+                    }
+
+                    # case 2
+                    scatter.plot(mee,byPair=list(probe=isolate({input$scatter.plot.probes}),gene=c(isolate({input$scatter.plot.genes}))),
+                                 category="TN", save=FALSE,lm_line=TRUE)
+                } else {
+                    # case 3
+                    if(nchar(isolate({input$scatter.plot.probes})) == 0){
+                        createAlert(session, "elmermessage", "elmerAlert", title = "Probe missing", style =  "success",
+                                    content =   "Please select a probe", append = TRUE)
+                        return(NULL)
+                    }
+                    scatter.plot(mee,byProbe=list(probe=isolate({input$scatter.plot.probes}),geneNum=isolate({input$scatter.plot.nb.genes})),
+                                 category="TN", dir.out ="./ELMER.example/Result/LUSC", save=FALSE)
+                }
+            } else if (plot.type == "schematic.plot") {
+                if(is.null(mee)){
+                    createAlert(session, "elmermessage", "elmerAlert", title = "Mee object missing", style =  "success",
+                                content =   "Please upload the mee object for this plot", append = TRUE)
+                    return(NULL)
+                }
+                # Two cases
+                # 1 - By probe
+                pair.obj <- fetch.pair(pair=pair,
+                                       probeInfo = getProbeInfo(mee),
+                                       geneInfo = getGeneInfo(mee))
+                if(isolate({input$schematic.plot.type}) == "probes"){
+                    if(nchar(isolate({input$schematic.plot.probes})) == 0){
+                        createAlert(session, "elmermessage", "elmerAlert", title = "Probe missing", style =  "success",
+                                    content =   "Please select a probe", append = TRUE)
+                        return(NULL)
+                    }
+
+                    schematic.plot(pair=pair.obj, byProbe=isolate({input$schematic.plot.probes}),save=FALSE)
+                } else if(isolate({input$schematic.plot.type}) == "genes"){
+                    if(nchar(isolate({input$schematic.plot.genes})) == 0){
+                        createAlert(session, "elmermessage", "elmerAlert", title = "Gene missing", style =  "success",
+                                    content =   "Please select a gene", append = TRUE)
+                        return(NULL)
+                    }
+
+                    # 2 - By genes
+                    schematic.plot(pair=pair.obj, byGene=isolate({input$schematic.plot.genes}),save=FALSE)
+                }
+            } else if(plot.type == "motif.enrichment.plot") {
+                motif.enrichment.plot(motif.enrichment=motif.enrichment,
+                                      #significant=list(OR=1.3,lowerOR=1.3),
+                                      save=FALSE)
+            } else if(plot.type == "ranking.plot"){
+                if(nchar(isolate({input$ranking.plot.motif})) == 0){
+                    createAlert(session, "elmermessage", "elmerAlert", title = "Motif missing", style =  "success",
+                                content =   "Please select a motif", append = TRUE)
+                    return(NULL)
+                }
+                label <- list(isolate({input$ranking.plot.tf}))
+                names(label) <- isolate({input$ranking.plot.motif})
+                gg <- TF.rank.plot(motif.pvalue=TF.meth.cor,
+                                   motif=isolate({input$ranking.plot.motif}),
+                                   TF.label=label,
+                                   save=FALSE)
+                # names were not fitting in the plot. Reducing the size
+                pushViewport(viewport(height=0.8,width=0.8))
+                grid.draw(gg[[1]])
+            }
+        })
+    })
+    observeEvent(input$elmerPlotBt , {
+        updateCollapse(session, "collapelmer", open = "Plots")
+        output$elmerPlot <- renderUI({
+            plotOutput("elmer.plot", width = paste0(isolate({input$elmerwidth}), "%"), height = isolate({input$elmerheight}))
+        })})
+
+    # Table
+    observeEvent(input$elmerTableType , {
+        updateCollapse(session, "collapelmer", open = "Results table")
+        output$elmerResult <- renderDataTable({
+            if(!is.null(elmer.results.data())){
+                if(input$elmerTableType == "tf"){
+                    as.data.frame(TF)
+                } else if(input$elmerTableType == "sigprobes"){
+                    as.data.frame(Sig.probes)
+                } else if(input$elmerTableType == "motif"){
+                    as.data.frame(motif.enrichment)
+                } else if(input$elmerTableType == "pair"){
+                    as.data.frame(pair)
+                }
+            }
+        },
+        options = list(pageLength = 10,
+                       scrollX = TRUE,
+                       jQueryUI = TRUE,
+                       pagingType = "full",
+                       lengthMenu = list(c(10, 20, -1), c('10', '20', 'All')),
+                       language.emptyTable = "No results found",
+                       "dom" = 'T<"clear">lfrtip',
+                       "oTableTools" = list(
+                           "sSelectedClass" = "selected",
+                           "sRowSelect" = "os",
+                           "sSwfPath" = paste0("//cdn.datatables.net/tabletools/2.2.4/swf/copy_csv_xls.swf"),
+                           "aButtons" = list(
+                               list("sExtends" = "collection",
+                                    "sButtonText" = "Save",
+                                    "aButtons" = c("csv","xls")
+                               )
+                           )
+                       )
+        ), callback = "function(table) {table.on('click.dt', 'tr', function() {Shiny.onInputChange('allRows',table.rows('.selected').data().toArray());});}"
+        )
+    })
 
 }

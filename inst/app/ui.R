@@ -9,6 +9,8 @@ data(paths.hsa)
 pathways.id <- names(paths.hsa)
 names(pathways.id) <- unname(paths.hsa)
 
+menu.icon <- "arrow-circle-right"
+
 table.code <- c('01','02','03','04','05','06','07','08','09','10',
                 '11','12','13','14','20','40','50','60','61')
 names(table.code) <- c("Primary solid Tumor","Recurrent Solid Tumor",
@@ -38,21 +40,45 @@ inputTextarea <- function(inputId, value="", nrows, ncols) {
 
 
 header <- dashboardHeader(
-    title = "TCGAbiolinks"
+    title = "TCGAbiolinks",
+    titleWidth = 300
 )
+header$children[[2]]$children <-  tags$a(href='http://mycompanyishere.com',
+                                           tags$img(src='logo_red.png',height='30',width='250'))
 
 sidebar <-  dashboardSidebar(
+    width = 250,
     sidebarMenu(
         menuItem("biOMICs search" , tabName = "ontology", icon = icon("search")),
         #menuItem("Report" , tabName = "report", icon = icon("book")),
-        menuItem("TCGA search" , tabName = "tcgaSearch", icon = icon("search")),
-        menuItem("OncoPrint" , tabName = "tcgaOncoPrint", icon = icon("picture-o")),
-        menuItem("Profile plot" , tabName = "tcgaProfilePlot", icon = icon("picture-o")),
-        menuItem("Survival plot" , tabName = "tcgasurvival", icon = icon("picture-o")),
-        menuItem("DMR analysis" , tabName = "dmr", icon = icon("flask")),
-        menuItem("DEA analysis" , tabName = "dea", icon = icon("flask")),
-        menuItem("Starburst plot" , tabName = "starburst", icon = icon("picture-o")),
-        menuItem("Enrichment analysis" , tabName = "ea", icon = icon("flask"))
+        menuItem("TCGA Data", icon = icon(menu.icon),
+                 menuSubItem("TCGA search" , tabName = "tcgaSearch", icon = icon("search")),
+                 menuSubItem("Data summmary" , tabName = "tcgaSummary", icon = icon("info"))
+        ),
+        menuItem("Clinical analysis", icon = icon(menu.icon),
+                 menuSubItem("Profile plot" , tabName = "tcgaProfilePlot", icon = icon("picture-o")),
+                 menuSubItem("Survival plot" , tabName = "tcgasurvival", icon = icon("picture-o"))
+        ),
+
+        menuItem("Epigenetic analysis", icon = icon(menu.icon),
+                 menuSubItem("Differential methylation analysis" , tabName = "dmr", icon = icon("flask")),
+                 menuSubItem("Volcano plot" , tabName = "volcano", icon = icon("picture-o")),
+                 menuSubItem("Heatmap plot" , tabName = "heatmap", icon = icon("picture-o")),
+                 menuItem("Mean DNA methylation plot" , tabName = "meanmet", icon = icon("picture-o"))
+        ),
+        menuItem("Transcriptomic analysis", icon = icon(menu.icon),
+                 menuSubItem("Differential expression analysis" , tabName = "dea", icon = icon("flask")),
+                 menuSubItem("Volcano plot" , tabName = "volcano", icon = icon("picture-o")),
+                 menuSubItem("Heatmap plot" , tabName = "heatmap", icon = icon("picture-o")),
+                 menuSubItem("Enrichment analysis" , tabName = "ea", icon = icon("flask"))
+        ),
+        menuItem("Genomic analysis", icon = icon(menu.icon),
+                 menuSubItem("OncoPrint plot" , tabName = "tcgaOncoPrint", icon = icon("picture-o"))
+        ),
+        menuItem("Integrative analysis", icon = icon(menu.icon),
+                 menuSubItem("Starburst plot" , tabName = "starburst", icon = icon("picture-o")),
+                 menuSubItem("ELMER" , tabName = "elmer", icon = icon("flask"))
+        )
         #menuItem("ELMER analysis" , tabName = "elmer", icon = icon("flask"))
     )
 )
@@ -150,6 +176,7 @@ body <-  dashboardBody(
 
                 )
         ),
+
         tabItem(tabName = "tcgaSearch",
                 fluidRow(
                     column(10, bsAlert("tcgasearchmessage"),
@@ -194,7 +221,7 @@ body <-  dashboardBody(
                                bsTooltip("tcgaDownloadBarcode", "Barcodes separeted by (;), (,) or (new line)",
                                          "left"),
                                useShinyjs(),
-                               inputTextarea('tcgaDownloadBarcode', '', 2, 35),
+                               inputTextarea('tcgaDownloadBarcode', '', 2, 30),
                                useShinyjs(),
                                selectizeInput('tcgaFrnaseqv2typeFilter',
                                               'RNASeqV2 File type filter',
@@ -266,7 +293,8 @@ body <-  dashboardBody(
                                                 "stad"="stad",
                                                 "thca"="thca", "ucec"="ucec"),
                                               multiple = FALSE),
-                               checkboxInput("saveSubtype", "Save as rda?", value = FALSE, width = NULL),
+                               checkboxInput("saveSubtypeRda", "Save as rda?", value = FALSE, width = NULL),
+                               checkboxInput("saveSubtypeCsv", "Save as csv?", value = FALSE, width = NULL),
                                actionButton("tcgaSubtypeBt",
                                             "TCGA Subtype Search",
                                             style = "background-color: #000080;
@@ -289,7 +317,7 @@ body <-  dashboardBody(
                                bsTooltip("clinicalBarcode", "Barcodes separeted by (;), (,) or (new line)",
                                          "left"),
                                useShinyjs(),
-                               inputTextarea('clinicalBarcode', '', 2, 35),
+                               inputTextarea('clinicalBarcode', '', 2, 30),
                                selectizeInput('tcgaClinicalFilter',
                                               'Clinical file type filter',
                                               c("biospecimen_aliquot",
@@ -314,7 +342,8 @@ body <-  dashboardBody(
                                                 "clinical_patient",
                                                 "clinical_radiation"),
                                               multiple = FALSE),
-                               checkboxInput("saveClinical", "Save result as rda?", value = FALSE, width = NULL),
+                               checkboxInput("saveClinicalRda", "Save result as rda?", value = FALSE, width = NULL),
+                               checkboxInput("saveClinicalCsv", "Save result as csv?", value = FALSE, width = NULL),
                                actionButton("tcgaClinicalBt",
                                             "TCGA Subtype Search",
                                             style = "background-color: #000080;
@@ -347,16 +376,69 @@ body <-  dashboardBody(
                                             width: 49%",
                                             icon = icon("download"))
                            ),
-                           box(title = "Directory to save files",width = NULL,
+                           box(title = "Directory to save & prepare files",width = NULL,
                                status = "danger",
                                solidHeader = FALSE, collapsible = TRUE, collapsed = FALSE,
-                               bsTooltip("tcgafolder", "Select a folder where data will be saved/downloaded",
+                               bsTooltip("tcgafolder", "Select a folder where data will be read/saved/downloaded",
                                          "left"),
-                               shinyDirButton('tcgafolder', 'Folder to save', 'Please select a folder where files will be saved',
+                               shinyDirButton('tcgafolder', 'Select directory', 'Please select a folder where files will be saved',
                                               class='shinyDirectories btn-default')
                            ),
                            bsAlert("tcgaddirmessage")
                     ))
+        ),
+        tabItem(tabName = "tcgaSummary",
+                fluidRow(
+                    column(10, bsAlert("tcgaSummaryMessage"),
+                           bsCollapse(id = "collapseTCGAsummary", open = "Summary",
+                                      bsCollapsePanel("Summary", uiOutput("tcgaSummary"), style = "default")
+                           )),
+                    column(2,
+                           box(title = "Type of plot",width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE,
+                               radioButtons("summaryInputRb", "Plot type:",
+                                            c("Type of samples"="type",
+                                              "Platforms vs samples"="platsample"))),
+                           box(title = "Parameters",width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE,
+                               selectizeInput('tcgaSummaryTumorFilter',
+                                              'Tumor',
+                                              unique(TCGAquery()$Disease),
+                                              multiple = TRUE),
+                               selectizeInput('tcgaSummaryExpFilter',
+                                              'Platforms',
+                                              unique(TCGAquery()$Platform),
+                                              multiple = TRUE, selected = NULL),
+                               selectizeInput('tcgaSummarySamplestypeFilter',
+                                              'Sample type',
+                                              table.code,
+                                              multiple = TRUE),
+                               selectizeInput('tcgaSummaryLevelFilter',
+                                              'Level filter',
+                                              c(1:3),
+                                              multiple = FALSE, selected = 1)),
+                           box(title = "Colors control",width = NULL,  status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
+                               colourInput("summarySetsBarColor", "Sets Bar color", value = "#56B4E9")),
+                           box(title = "Plot controls",width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
+                               checkboxInput("summaryAddBarCount", "Add counts label to barchart?", value = TRUE, width = NULL),
+                               #sliderInput("summaryncol", "Number columns", min = 1, max = 4, value = 3),
+                               sliderInput("summarywidth", "Plot Width (%)", min = 0, max = 100, value = 100),
+                               sliderInput("summaryheight", "Plot Height (px)", min = 0, max = 1200, value = 800)),
+                           actionButton("tcgaSummaryBt",
+                                        "Plot summary",
+                                        style = "background-color: #000080;
+                                            color: #FFFFFF;
+                                            margin-left: auto;
+                                            margin-right: auto;
+                                            width: 100%",
+                                        icon = icon("picture-o"))
+                    )
+                )
         ),
         tabItem(tabName = "tcgaOncoPrint",
                 fluidRow(
@@ -368,22 +450,10 @@ body <-  dashboardBody(
                            box(title = "Oncoprint data",width = NULL,
                                status = "danger",
                                solidHeader = FALSE, collapsible = TRUE, collapsed = FALSE,
-                               shinyFilesButton('maffile', 'Select maf file', 'Please select a maf file',
+                               shinyFilesButton('maffile', 'Select MAF file', 'Please select a maf file',
                                                 multiple = FALSE),
-                               radioButtons("oncoInputRb", "Genes by:",
-                                            c("Selection"="Selection",
-                                              "Text"="text")),
-                               bsTooltip("oncoGenesTextArea", "Genes separeted by (;), (,) or (new line)",
-                                         "left"),
-                               useShinyjs(),
-                               inputTextarea('oncoGenesTextArea', '', 2, 35),
-                               selectizeInput('oncoGenes',
-                                              "genes",
-                                              choices = NULL,  multiple = TRUE)
-                           ),
-                           box(title = "Oncoprint metadata",width = NULL,
-                               status = "danger",
-                               solidHeader = FALSE, collapsible = TRUE, collapsed = FALSE,
+                               tags$br(),
+                               tags$br(),
                                shinyFilesButton('mafAnnotation', 'Select annotation file', 'Please select a file with the annotation data frame ',
                                                 multiple = FALSE),
                                useShinyjs(),
@@ -394,6 +464,23 @@ body <-  dashboardBody(
                                               "Annotation position",
                                               choices = c("top","bottom"),selected = "top",  multiple = FALSE)
                            ),
+                           box(title = "Gene selection",width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = FALSE,
+                               radioButtons("oncoInputRb", "Genes by:",
+                                            c("Selection"="Selection",
+                                              "Text"="text",
+                                              "File"="file")),
+                               bsTooltip("oncoGenesTextArea", "Genes separeted by (;), (,) or (new line)",
+                                         "left"),
+                               useShinyjs(),
+                               inputTextarea('oncoGenesTextArea', '', 2, 30),
+                               selectizeInput('oncoGenes',
+                                              "genes",
+                                              choices = NULL,  multiple = TRUE),
+                               shinyFilesButton('oncoGenesFiles', 'Select file with genes', 'Please select a file with genes',  multiple = FALSE)
+                           ),
+
                            box(title = "Colors control",width = NULL,  status = "danger",
                                solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
                                colourInput("colDEL", "DEL color", value = "red"),
@@ -403,26 +490,220 @@ body <-  dashboardBody(
                            box(title = "Size control",width = NULL,  status = "danger",
                                solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
                                sliderInput("oncowidth", "Plot Width (%)", min = 0, max = 100, value = 100),
-                               sliderInput("oncoheight", "Plot Height (px)", min = 0, max = 800, value = 400)
+                               sliderInput("oncoheight", "Plot Height (px)", min = 0, max = 1200, value = 400)
                            ),
-                           box(title = "Oncoprint plot",width = NULL,
+                           box(title = "Oncoprint options",width = NULL,
                                status = "danger",
                                solidHeader = FALSE, collapsible = TRUE, collapsed = FALSE,
                                bsTooltip("oncoRmCols", "If there is no alteration in that sample, whether remove it on the oncoprint",
                                          "left"),
                                checkboxInput("oncoRmCols", "Remove empty columns?", value = FALSE, width = NULL),
                                checkboxInput("oncoShowColsNames", "Show column names?", value = FALSE, width = NULL),
-                               checkboxInput("oncoShowRowBarplot", "Show barplot annotation on rows?", value = TRUE, width = NULL),
-                               actionButton("oncoprintPlot",
-                                            "Plot oncoprint",
-                                            style = "background-color: #000080;
+                               checkboxInput("oncoShowRowBarplot", "Show barplot annotation on rows?", value = TRUE, width = NULL)
+                           ),
+                           actionButton("oncoprintPlot",
+                                        "Plot oncoprint",
+                                        style = "background-color: #000080;
                                               color: #FFFFFF;
                                               margin-left: auto;
                                               margin-right: auto;
                                               width: 100%",
-                                            icon = icon("picture-o")
-                               )
+                                        icon = icon("picture-o")
                            )
+                    )
+                )
+        ),
+        tabItem(tabName = "volcano",
+
+                fluidRow(
+                    column(10,  bsAlert("volcanomessage"),
+                           bsCollapse(id = "collapseVolcano", open = "Volcano plot",
+                                      #bsCollapsePanel("Probes info", dataTableOutput('probesSE'), style = "default"),
+                                      bsCollapsePanel("Volcano plot", uiOutput("volcanoPlot"), style = "default"))),
+                    column(2,
+                           box(title = "Data",width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = FALSE,
+                               shinyFilesButton('volcanofile', 'Select results (.csv)', 'Please select the csv file with the results',
+                                                multiple = FALSE)),
+                           box(title = "Volcano options",width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
+                               radioButtons("volcanoInputRb", "Select input type:",
+                                            c("DNA methylation"="met",
+                                              "Expression"="exp")),
+                               numericInput("volcanoxcutMet", "DNA methylation threshold",
+                                            min = 0, max = 1, value = 0, step = 0.05),
+                               numericInput("volcanoxcutExp", "Log FC threshold",
+                                            min = 0, max = 100, value = 0, step = 0.5),
+                               numericInput("volcanoycut", "P-value adj cut-off",
+                                            min = 0, max = 1, value = 0.05, step = 0.001),
+                               checkboxInput("volcanoSave", "Save file with results?", value = FALSE, width = NULL),
+                               box(title = "Highligthing options",width = NULL,
+                                   solidHeader = TRUE, collapsible = TRUE, collapsed = TRUE,
+                                   checkboxInput("volcanoNames", "Show names?", value = FALSE, width = NULL),
+                                   checkboxInput("volcanoNamesFill", "Boxed names?", value = TRUE, width = NULL),
+                                   selectizeInput('volcanoHighlight',
+                                                  "Genes/Probes to Highlight",
+                                                  choices = NULL,  multiple = TRUE),
+                                   selectizeInput('volcanoShowHighlitgh',
+                                                  "Points to highlight",
+                                                  choices = c("highlighted","significant","both"),  multiple = FALSE)
+                               )
+                           ),
+                           box(title = "Color control",width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
+                               colourInput("volcanoColHighlight", "Highlight color", value = "orange"),
+                               colourInput("colinsignificant", "Insignificant color", value = "black"),
+                               colourInput("colHypomethylated", "Hypomethylated color", value = "darkgreen"),
+                               colourInput("colHypermethylated", "Hypermethylate color", value = "red"),
+                               colourInput("colDownregulated", "Downregulated color", value = "darkgreen"),
+                               colourInput("colUpregulated", "Upregulated genes color", value = "red")
+                           ),
+                           box(title = "Plot controls",width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
+                               sliderInput("volcanowidth", "Plot Width (%)", min = 0, max = 100, value = 100),
+                               sliderInput("volcanoheight", "Plot Height (px)", min = 0, max = 1200, value = 400)),
+                           actionButton("volcanoPlotBt",
+                                        "Volcano plot",
+                                        style = "background-color: #000080;
+                                 color: #FFFFFF;
+                                 margin-left: auto;
+                                 margin-right: auto;
+                                 width: 100%",
+                                        icon = icon("picture-o")
+                           )
+                    )
+                )
+        ),
+        tabItem(tabName = "meanmet",
+
+                fluidRow(
+                    column(10,  bsAlert("meanmetmessage"),
+                           bsCollapse(id = "collapsemeanmet", open = "Mean DNA methylation plot",
+                                      bsCollapsePanel("Mean DNA methylation plot", uiOutput("meanMetplot"), style = "default"))),
+                    column(2,
+                           box(title = "DNA methylation object",width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = FALSE,
+                               shinyFilesButton('meanmetfile', 'Select SummarizedExperiment', 'Please select SummarizedExperiment object',
+                                                multiple = FALSE)),
+                           box(title = "Mean DNA methylation",width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
+                               selectizeInput('meanmetgroupCol',
+                                              "Group column",
+                                              choices = NULL,  multiple = FALSE),
+                               selectizeInput('meanmetsubgroupCol',
+                                              "Sub group column",
+                                              choices = NULL,  multiple = FALSE),
+                               checkboxInput("meanmetplotjitter", "Plot jitters?", value = TRUE, width = NULL),
+                               conditionalPanel(
+                                   condition = "input.meanmetplotjitter == TRUE",
+                                   selectizeInput('meanmetsort',
+                                                  "Sort method",
+                                                  choices = c("None"=NULL,
+                                                              "Ascending by mean"="mean.asc",
+                                                              "Descending by mean"="mean.desc",
+                                                              "Ascending by median"="median.asc",
+                                                              "Descending by median"="median.desc"),
+                                                  multiple = FALSE)
+                               ),
+                               sliderInput("meanmetAxisAngle", "x-axis label angle:",   min = 0, max = 360, value = 90, step= 45)),
+                           box(title = "Plot controls",width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
+                               sliderInput("meanmetwidth", "Plot Width (%)", min = 0, max = 100, value = 100),
+                               sliderInput("meanmetheight", "Plot Height (px)", min = 0, max = 1200, value = 800)),
+                           actionButton("meanmetPlot",
+                                        "DNA mean methylation plot",
+                                        style = "background-color: #000080;
+                                            color: #FFFFFF;
+                                            margin-left: auto;
+                                            margin-right: auto;
+                                            width: 100%",
+                                        icon = icon("picture-o"))
+                    )
+                )
+        ),
+        tabItem(tabName = "heatmap",
+
+                fluidRow(
+                    column(10,  bsAlert("heatmapmessage"),
+                           bsCollapse(id = "collapseHeatmap", open = "Heatmap",
+                                      bsCollapsePanel("Heatmap", uiOutput("heatmapPlot"), style = "default"))),
+                    column(2,
+                           box(title = "Data",width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = FALSE,
+                               shinyFilesButton('heatmapfile', 'Select rda file',
+                                                'Please select SummarizedExperiment or data frame object',
+                                                multiple = FALSE),
+                               tags$br(),
+                               tags$br(),
+                               shinyFilesButton('heatmapresultsfile', 'Select results file', 'Please select object',
+                                                multiple = FALSE)),
+                           box(title = "Type of heatmap",width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
+                               radioButtons("heatmapTypeInputRb", NULL,
+                                            c("DNA methylation"="met",
+                                              "Gene expression"="exp"),selected = "met")
+                           ),
+                           box(title = "Lines selection",width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
+                               useShinyjs(),
+                               radioButtons("heatmapProbesInputRb", "Select probes by:",
+                                            c("Status"="Status",
+                                              "Text"="text")),
+                               inputTextarea('heatmapProbesTextArea', '', 2, 30),
+                               checkboxInput("heatmap.hypoprobesCb", "Hypermethylatd probes", value = TRUE, width = NULL),
+                               checkboxInput("heatmap.hyperprobesCb", "Hypomethylated probes", value = TRUE, width = NULL),
+                               radioButtons("heatmapGenesInputRb", "Select genes by:",
+                                            c("Status"="Status",
+                                              "Text"="text")),
+                               inputTextarea('heatmapGenesTextArea', '', 2, 30),
+                               checkboxInput("heatmap.upGenesCb", "Up regulated genes", value = TRUE, width = NULL),
+                               checkboxInput("heatmap.downGenewsCb", "Down regulated genes", value = TRUE, width = NULL)),
+                           box(title = "Annotations options",width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
+                               selectizeInput('colmetadataheatmap',
+                                              "Columns annotations",
+                                              choices = NULL,  multiple = TRUE),
+                               checkboxInput("heatmap.sortCb", "Sort by column?", value = FALSE, width = NULL),
+                               selectizeInput('heatmapSortCol',
+                                              "Sort by columns",
+                                              choices = NULL,  multiple = FALSE),
+                               selectizeInput('rowmetadataheatmap',
+                                              "Rows annotations",
+                                              choices = NULL,  multiple = TRUE)),
+                           box(title = "Other options",width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
+                               selectizeInput('heatmapScale',
+                                              "Scale data",
+                                              choices = c("none","row","col"),selected = "none",  multiple = FALSE),
+                               checkboxInput("heatmap.clusterrows", "Cluster rows?", value = FALSE, width = NULL),
+                               checkboxInput("heatmap.clustercol", "Cluster columns?", value = FALSE, width = NULL),
+                               checkboxInput("heatmap.show.row.names", "Show row names?", value = FALSE, width = NULL),
+                               checkboxInput("heatmap.show.col.names", "Show col names?", value = FALSE, width = NULL)),
+                           box(title = "Plot control",width = NULL,  status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
+                               sliderInput("heatmapwidth", "Plot Width (%)", min = 0, max = 100, value = 100),
+                               sliderInput("heatmapheight", "Plot Height (px)", min = 0, max = 800, value = 1000)
+                           ),
+                           actionButton("heatmapPlotBt",
+                                        "Heatmap plot",
+                                        style = "background-color: #000080;
+                                                 color: #FFFFFF;
+                                                 margin-left: auto;
+                                                 margin-right: auto;
+                                                 width: 100%",
+                                        icon = icon("picture-o"))
                     )
                 )
         ),
@@ -431,8 +712,7 @@ body <-  dashboardBody(
                 fluidRow(
                     column(10,  bsAlert("dmrmessage"),
                            bsCollapse(id = "collapseDmr", open = "DMR plots",
-                                      bsCollapsePanel("Probes info", dataTableOutput('probesSE'), style = "default"),
-                                      bsCollapsePanel("DMR plots", uiOutput("dmrPlot"), style = "default"))),
+                                      bsCollapsePanel("Probes info", dataTableOutput('probesSE'), style = "default"))),
                     column(2,
                            box(title = "DNA methylation object",width = NULL,
                                status = "danger",
@@ -456,115 +736,15 @@ body <-  dashboardBody(
                                               choices = NULL,  multiple = FALSE),
                                selectizeInput('dmrgroups',
                                               "Groups",
-                                              choices = NULL,  multiple = TRUE),
-                               actionButton("dmrAnalysis",
-                                            "DMR analysis",
-                                            style = "background-color: #000080;
+                                              choices = NULL,  multiple = TRUE)),
+                           actionButton("dmrAnalysis",
+                                        "DMR analysis",
+                                        style = "background-color: #000080;
                                               color: #FFFFFF;
                                               margin-left: auto;
                                               margin-right: auto;
                                               width: 100%",
-                                            icon = icon("flask"))),
-                           box(title = "Volcano plot",width = NULL,
-                               status = "danger",
-                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
-                               shinyFilesButton('volcanofile', 'Select results (.csv)', 'Please select the csv file with the results',
-                                                multiple = FALSE),
-                               colourInput("colHypomethylated", "Hypomethylated color", value = "darkgreen"),
-                               colourInput("colHypermethylated", "Hypermethylate color", value = "red"),
-                               colourInput("colinsignificant", "Insignificant color", value = "black"),
-                               checkboxInput("dmrNamesVolcano", "Add probe names?", value = FALSE, width = NULL),
-                               checkboxInput("dmrNamesVolcanoFill", "Fill names?", value = TRUE, width = NULL),
-                               actionButton("volcanoPlot",
-                                            "Volcano plot",
-                                            style = "background-color: #000080;
-                                              color: #FFFFFF;
-                                              margin-left: auto;
-                                              margin-right: auto;
-                                              width: 100%",
-                                            icon = icon("picture-o"))
-                           ),
-                           box(title = "Mean DNA methylation",width = NULL,
-                               status = "danger",
-                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
-                               selectizeInput('meanmetgroupCol',
-                                              "Group column",
-                                              choices = NULL,  multiple = FALSE),
-                               selectizeInput('meanmetsubgroupCol',
-                                              "Sub group column",
-                                              choices = NULL,  multiple = FALSE),
-                               checkboxInput("meanmetplotjitter", "Plot jitters?", value = TRUE, width = NULL),
-                               conditionalPanel(
-                                   condition = "input.meanmetplotjitter == TRUE",
-                                   selectizeInput('meanmetsort',
-                                                  "Sort method",
-                                                  choices = c("None"=NULL,
-                                                              "Ascending by mean"="mean.asc",
-                                                              "Descending by mean"="mean.desc",
-                                                              "Ascending by median"="median.asc",
-                                                              "Descending by median"="median.desc"),
-                                                  multiple = FALSE)
-                               ),
-                               sliderInput("meanmetAxisAngle", "x-axis label angle:",   min = 0, max = 360, value = 90, step= 45),
-                               actionButton("meanmetPlot",
-                                            "DNA mean methylation plot",
-                                            style = "background-color: #000080;
-                                              color: #FFFFFF;
-                                              margin-left: auto;
-                                              margin-right: auto;
-                                              width: 100%",
-                                            icon = icon("picture-o"))
-
-                           ),
-                           box(title = "Heatmap",width = NULL,
-                               status = "danger",
-                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
-                               selectizeInput('heatmapgroupCol',
-                                              "Group column",
-                                              choices = NULL,  multiple = FALSE),
-                               selectizeInput('heatmapgroup1',
-                                              "Group 1",
-                                              choices = NULL,  multiple = FALSE),
-                               selectizeInput('heatmapgroup2',
-                                              "Group 2",
-                                              choices = NULL,  multiple = FALSE),
-                               tags$hr(),
-                               radioButtons("heatmapInputRb", "Select probes by:",
-                                            c("Status"="Status",
-                                              "Text"="text")),
-                               inputTextarea('heatmapProbesTextArea', '', 2, 35),
-                               checkboxInput("heatmap.hypoprobesCb", "Hypermethylatd probes", value = TRUE, width = NULL),
-                               checkboxInput("heatmap.hyperprobesCb", "Hypomethylated probes", value = TRUE, width = NULL),
-                               tags$hr(),
-                               selectizeInput('colmetadataheatmap',
-                                              "Columns annotations",
-                                              choices = NULL,  multiple = TRUE),
-                               checkboxInput("heatmap.sortCb", "Sort by column?", value = FALSE, width = NULL),
-                               selectizeInput('heatmapSortCol',
-                                              "Sort by columns",
-                                              choices = NULL,  multiple = FALSE),
-                               selectizeInput('rowmetadataheatmap',
-                                              "Rows annotations",
-                                              choices = NULL,  multiple = TRUE),
-                               tags$hr(),
-                               checkboxInput("heatmap.clusterrows", "Cluster rows?", value = FALSE, width = NULL),
-                               checkboxInput("heatmap.clustercol", "Cluster columns?", value = FALSE, width = NULL),
-                               checkboxInput("heatmap.show.row.names", "Show row names?", value = FALSE, width = NULL),
-                               checkboxInput("heatmap.show.col.names", "Show col names?", value = FALSE, width = NULL),
-                               actionButton("heatmapPlot",
-                                            "Heatmap plot",
-                                            style = "background-color: #000080;
-                                              color: #FFFFFF;
-                                              margin-left: auto;
-                                              margin-right: auto;
-                                              width: 100%",
-                                            icon = icon("picture-o"))
-                           ),
-                           box(title = "Plot controls",width = NULL,
-                               status = "danger",
-                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
-                               sliderInput("meanmetwidth", "Plot Width (%)", min = 0, max = 100, value = 100),
-                               sliderInput("meanmetheight", "Plot Height (px)", min = 0, max = 800, value = 400))
+                                        icon = icon("flask"))
                     )
                 )
         ),
@@ -580,15 +760,17 @@ body <-  dashboardBody(
                                solidHeader = FALSE, collapsible = FALSE,
                                radioButtons("tcgaEaInputRb", "Genes by:",
                                             c("Selection"="Selection",
-                                              "Text"="text")),
+                                              "Text"="text",
+                                              "File"="file")),
                                bsTooltip("eaGenesTextArea", "Genes separeted by (;), (,) or (new line)",
                                          "left"),
                                useShinyjs(),
-                               inputTextarea('eaGenesTextArea', '', 2, 35),
+                               inputTextarea('eaGenesTextArea', '', 2, 30),
                                selectizeInput('eagenes',
                                               "Genes",
                                               choices = unique(rownames(TCGAbiolinks:::EAGenes)),
-                                              multiple = TRUE)),
+                                              multiple = TRUE),
+                               shinyFilesButton('eaGenesFiles', 'Select file with genes', 'Please select a file with genes',  multiple = FALSE)),
                            box(title = "Colors control",width = NULL,  status = "danger",
                                solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
                                colourInput("colBP", "Biological Process", value = "orange"),
@@ -601,7 +783,6 @@ body <-  dashboardBody(
                                            step=1, min = 1, max = 20, value = 10),
                                sliderInput("eawidth", "Plot Width (%)", min = 0, max = 100, value = 100),
                                sliderInput("eaheight", "Plot Height (px)", min = 0, max = 1000, value = 1000)
-
                            ),
                            actionButton("eaplot",
                                         "EA barplot",
@@ -621,22 +802,25 @@ body <-  dashboardBody(
                                       bsCollapsePanel("Profile plot", uiOutput("profileplot"), style = "default")
                            )),
                     column(2,
-                           box(title = "Profile plot",width = NULL,
+                           box(title = "Data ",width = NULL,
                                status = "danger",
                                solidHeader = FALSE, collapsible = FALSE,
                                shinyFilesButton('profileplotfile', 'Select rda file', 'Please select a rda file with a data frame',
-                                                multiple = FALSE),
+                                                multiple = FALSE)),
+                           box(title = "Parameters ",width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
                                useShinyjs(),
                                selectizeInput('profileplotgroup',
-                                              'Column with the group information',
+                                              'Group column',
                                               choices=NULL,
                                               multiple = FALSE),
                                selectizeInput('profileplotsubtype',
-                                              'Column with the subtype information',
+                                              'Subgruoup column',
                                               choices=NULL,
                                               multiple = FALSE),
                                checkboxInput("profileplotrmnagroup", " Remove the NA groups?", value = FALSE, width = NULL),
-                               checkboxInput("profileplotrmnasub", " Remove the NA subtypes?", value = FALSE, width = NULL)
+                               checkboxInput("profileplotrmnasub", " Remove the NA subgroups?", value = FALSE, width = NULL)
                            ),
                            box(title = "Plot controls",width = NULL,
                                status = "danger",
@@ -650,7 +834,7 @@ body <-  dashboardBody(
                                numericInput("margin4", "Move left line of vertical bar",
                                             min = -10, max = 10, value = 0.0, step = 0.1),
                                sliderInput("profilewidth", "Plot Width (%)", min = 0, max = 100, value = 100),
-                               sliderInput("profileheight", "Plot Height (px)", min = 0, max = 800, value = 800)),
+                               sliderInput("profileheight", "Plot Height (px)", min = 0, max = 1200, value = 800)),
                            actionButton("profileplotBt",
                                         "Plot profile plot",
                                         style = "background-color: #000080;
@@ -669,13 +853,17 @@ body <-  dashboardBody(
                                       bsCollapsePanel("survival plot", uiOutput("survivalplot"), style = "default")
                            )),
                     column(2,
-                           box(title = "Survival plot",width = NULL,
+                           box(title = "Data",width = NULL,
                                status = "danger",
                                solidHeader = FALSE, collapsible = FALSE,
-                               shinyFilesButton('survivalplotfile', 'Select rda file', 'Please select a rda file with a data frame',
-                                                multiple = FALSE),
+                               bsTooltip("survivalplotfile", "A csv or rda file","left"),
+                               shinyFilesButton('survivalplotfile', 'Select file', 'Please select a csv/rda file with a data frame',
+                                                multiple = FALSE)),
+                           box(title = "Parameters",width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
                                selectizeInput('survivalplotgroup',
-                                              'Column with the group information',
+                                              'Group column',
                                               choices=NULL,
                                               multiple = FALSE),
                                textInput("survivalplotLegend", label = "Legend text", value = "Legend"),
@@ -691,7 +879,7 @@ body <-  dashboardBody(
                                status = "danger",
                                solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
                                sliderInput("survivalwidth", "Plot Width (%)", min = 0, max = 100, value = 100),
-                               sliderInput("survivalheight", "Plot Height (px)", min = 0, max = 800, value = 800)),
+                               sliderInput("survivalheight", "Plot Height (px)", min = 0, max = 1200, value = 800)),
                            actionButton("survivalplotBt",
                                         "Plot survival plot",
                                         style = "background-color: #000080;
@@ -704,12 +892,10 @@ body <-  dashboardBody(
                 )
         ),
         tabItem(tabName = "dea",
-
                 fluidRow(
                     column(10,  bsAlert("deamessage"),
                            bsCollapse(id = "collapsedea", open = "DEA plots",
-                                      bsCollapsePanel("Genes info", dataTableOutput('deaSE'), style = "default"),
-                                      bsCollapsePanel("DEA plots", uiOutput("deaPlot"), style = "default"))),
+                                      bsCollapsePanel("Genes info", dataTableOutput('deaSE'), style = "default"))),
                     column(2,
                            box(title = "Gene expression object",width = NULL,
                                status = "danger",
@@ -766,24 +952,11 @@ body <-  dashboardBody(
                                             margin-right: auto;
                                             width: 100%",
                                             icon = icon("flask"))),
-                           box(title = "Volcano plot",width = NULL,
-                               status = "danger",
-                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
-                               colourInput("colUpregulated", "Upregulated genes color", value = "red"),
-                               colourInput("colDownregulated", "Down regulated color", value = "darkgreen"),
-                               colourInput("coldeainsignificant", "Insignificant color", value = "black"),
-                               actionButton("volcanodeaPlot",
-                                            "Volcano plot",
-                                            style = "background-color: #000080;
-                                            color: #FFFFFF;
-                                            margin-left: auto;
-                                            margin-right: auto;
-                                            width: 100%",
-                                            icon = icon("picture-o"))
-                           ),
                            box(title = "Pathway graphs",width = NULL,
                                status = "danger",
                                solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
+                               shinyFilesButton('pathewayexpfile', 'DEA result', 'Please select expression result object',
+                                                multiple = FALSE),
                                selectizeInput('pathway.id',
                                               "pathway ID",
                                               choices = pathways.id,
@@ -797,12 +970,7 @@ body <-  dashboardBody(
                                             margin-right: auto;
                                             width: 100%",
                                             icon = icon("file-pdf-o"))
-                           ),
-                           box(title = "Plot controls",width = NULL,
-                               status = "danger",
-                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
-                               sliderInput("deawidth", "Plot Width (%)", min = 0, max = 100, value = 100),
-                               sliderInput("deaheight", "Plot Height (px)", min = 0, max = 800, value = 400))
+                           )
                     )
                 )
         ),
@@ -814,32 +982,41 @@ body <-  dashboardBody(
                                       bsCollapsePanel("starburst result - probe gene pairs", dataTableOutput('starburstResult'), style = "default"),
                                       bsCollapsePanel("starburst plots", uiOutput("starburstPlot"), style = "default"))),
                     column(2,
-                           box(title = "Gene expression object",width = NULL,
+                           box(title = "Data",width = NULL,
                                status = "danger",
-                               solidHeader = FALSE, collapsible = FALSE,
-                               shinyFilesButton('starburstmetfile', 'Select SummarizedExperiment', 'Please select SummarizedExperiment object',
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = FALSE,
+                               bsTooltip("starburstmetfile", "Result from Differential DNA Methylation analysis",
+                                         "left"),
+                               shinyFilesButton('starburstmetfile', 'DMR result',
+                                                'Please select DMR_result file',
                                                 multiple = FALSE),
-                               shinyFilesButton('starburstexpfile', 'Select expression result', 'Please select expression result object',
+                               tags$br(),
+                               tags$br(),
+                               bsTooltip("starburstexpfile", "Result from Differential Expression Analysis",
+                                         "left"),
+                               shinyFilesButton('starburstexpfile', 'DEA result', 'Please select expression result object',
                                                 multiple = FALSE)),
                            box(title = "starburst analysis",width = NULL,
                                status = "danger",
                                solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
-                               numericInput("starburstexpFC", "Log FC threshold",
-                                            min = 0, max = 10, value = 0, step = 0.05),
-                               numericInput("starburstexFDR", "Expression FDR cut-off",
-                                            min = 0, max = 1, value = 0.05, step = 0.001),
-                               numericInput("starburstmetdiff", "Mean DNA methylation difference threshold",
-                                            min = 0, max = 1, value = 0, step = 0.05),
-                               numericInput("starburstmetFDR", "Methylation FDR cut-off",
-                                            min = 0, max = 1, value = 0.05, step = 0.001),
-                               selectizeInput('starburstgroup1',
-                                              "Group 1",
-                                              choices = NULL,  multiple = FALSE),
-                               selectizeInput('starburstgroup2',
-                                              "Group 2",
-                                              choices = NULL,  multiple = FALSE),
-                               checkboxInput("starburstNames", "Add genes names?", value = FALSE, width = NULL),
-                               checkboxInput("starburstNamesFill", "Fill names?", value = TRUE, width = NULL)
+                               box(title = "Threshold control",width = NULL,
+                                   solidHeader = TRUE, collapsible = TRUE, collapsed = TRUE,
+                                   numericInput("starburstexpFC", "Log FC threshold",
+                                                min = 0, max = 10, value = 0, step = 0.05),
+                                   numericInput("starburstexFDR", "Expression FDR cut-off",
+                                                min = 0, max = 1, value = 0.05, step = 0.001),
+                                   numericInput("starburstmetdiff", "Mean DNA methylation difference threshold",
+                                                min = 0, max = 1, value = 0, step = 0.05),
+                                   numericInput("starburstmetFDR", "Methylation FDR cut-off",
+                                                min = 0, max = 1, value = 0.05, step = 0.001)),
+                               box(title = "Highlight control",width = NULL,
+                                   solidHeader = TRUE, collapsible = TRUE, collapsed = TRUE,
+                                   checkboxInput("starburstNames", "Show genes names?", value = FALSE, width = NULL),
+                                   checkboxInput("starburstNamesFill", "Boxed names?", value = TRUE, width = NULL),
+                                   bsTooltip("starburstCircle", "Circle candidate biologically significant genes",
+                                             "left"),
+                                   checkboxInput("starburstCircle", "Circle genes?", value = TRUE, width = NULL)),
+                               checkboxInput("starburstSave", "Save result?", value = FALSE, width = NULL)
                            ),
                            box(title = "Colors control",width = NULL,
                                status = "danger",
@@ -857,7 +1034,7 @@ body <-  dashboardBody(
                                status = "danger",
                                solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
                                sliderInput("starburstwidth", "Plot Width (%)", min = 0, max = 100, value = 100),
-                               sliderInput("starburstheight", "Plot Height (px)", min = 0, max = 800, value = 400)),
+                               sliderInput("starburstheight", "Plot Height (px)", min = 0, max = 1200, value = 800)),
                            actionButton("starburstPlot",
                                         "starburst plot",
                                         style = "background-color: #000080;
@@ -872,27 +1049,178 @@ body <-  dashboardBody(
         tabItem(tabName = "elmer",
                 fluidRow(
                     column(10,  bsAlert("elmermessage"),
-                           bsCollapse(id = "collapsestelmer", open = "starburst plots",
-                                      bsCollapsePanel("ELMER result", dataTableOutput('elmerResult'), style = "default"),
-                                      bsCollapsePanel("Elmer plots", uiOutput("elmerPlot"), style = "default"))),
+                           bsCollapse(id = "collapelmer", open = "Plots",
+                                      bsCollapsePanel("Results table", dataTableOutput('elmerResult'), style = "default"),
+                                      bsCollapsePanel("Plots", uiOutput("elmerPlot"), style = "default"))),
                     column(2,
-                           box(title = "Create mee object", width = NULL,
+                           box(title = "Create mee", width = NULL,
                                status = "danger",
-                               solidHeader = FALSE, collapsible = FALSE,
+                               solidHeader = FALSE, collapsible = TRUE,collapsed = TRUE,
                                shinyFilesButton('elmermetfile', 'Select DNA methylation object', 'Please select DNA methylation object',
                                                 multiple = FALSE),
+                               tags$br(),
+                               tags$br(),
                                shinyFilesButton('elmerexpfile', 'Select expression object', 'Please select gene expression object',
                                                 multiple = FALSE),
-                               numericInput("elmermetnacut", "cut-off NA samples (%)",
+                               tags$hr(),
+                               selectizeInput('elmermeetype',
+                                              "Group column",
+                                              choices=NULL,
+                                              multiple = FALSE),
+                               selectizeInput('elmermeesubtype',
+                                              "Experiment group",
+                                              choices=NULL,
+                                              multiple = FALSE),
+                               selectizeInput('elmermeesubtype2',
+                                              "Control group",
+                                              choices=NULL,
+                                              multiple = FALSE),
+                               tags$hr(),
+                               bsTooltip("elmermetnacut", " By default, for the DNA methylation data
+                                                            will remove probes with NA values in more than 20% samples and
+                                                            remove the anottation data.",
+                                         "left"),
+                               numericInput("elmermetnacut", "DNA methylation: Cut-off NA samples (%)",
                                             min = 0, max = 1, value = 0.2, step = 0.1),
                                actionButton("elmerpreparemee",
                                             "Create mee object",
+                                            style = "background-color: #000080;
+                                         color: #FFFFFF;
+                                         margin-left: auto;
+                                         margin-right: auto;
+                                         width: 100%",
+                                            icon = icon("floppy-o"))),
+                           box(title = "Data", width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = FALSE,
+                               shinyFilesButton('elmermeefile', 'Select mee', 'Please select mee object',
+                                                multiple = FALSE),
+                               tags$br(),
+                               tags$br(),
+                               shinyFilesButton('elmerresultsfile', 'Select results', 'Please select results object',
+                                                multiple = FALSE)),
+                           box(title = "Analysis", width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
+                               box(title = "Differently methylated probes", width = NULL,
+                                   solidHeader = TRUE, collapsible = TRUE, collapsed = TRUE,
+                                   numericInput("elmermetdiff", " DNA methylation difference cutoff",
+                                                min = 0, max = 1, value = 0.3, step = 0.05),
+                                   numericInput("elmermetpercentage", " percentage",
+                                                min = 0, max = 1, value = 0.2, step = 0.01),
+                                   numericInput("elmermetpvalue", " pvalue",
+                                                min = 0, max = 1, value = 0.01, step = 0.01)
+                               ),
+                               box(title = "Predict enhancer-gene linkages", width = NULL,
+                                   solidHeader = TRUE, collapsible = TRUE, collapsed = TRUE,
+                                   numericInput("elmergetpairNumGenes", " Nearby genes",
+                                                min = 1, max = 100, value = 20, step = 1),
+                                   numericInput("elmergetpairpercentage", " percentage",
+                                                min = 0, max = 1, value = 0.2, step = 0.01),
+                                   numericInput("elmergetpairpermu", " Number of permuation",
+                                                min = 0, max = 10000, value = 10000, step = 1000),
+                                   numericInput("elmergetpairpvalue", "Pvalue",
+                                                min = 0, max = 1, value = 0.01, step = 0.01),
+                                   numericInput("elmergetpairportion", "Portion",
+                                                min = 0, max = 1, value = 0.3, step = 0.1),
+                                   checkboxInput("elmergetpairdiffExp", "Apply t-test", value = FALSE, width = NULL)
+                               ),
+                               box(title = "Get enriched motif", width = NULL,
+                                   solidHeader = TRUE, collapsible = TRUE, collapsed = TRUE,
+                                   numericInput("elmergetenrichedmotifMinIncidence", "Minimum incidence",
+                                                min = 0, max = 100, value = 10, step = 1),
+                                   numericInput("elmergetenrichedmotifLoweOR", "Lower boundary",
+                                                min = 0, max = 5, value = 1.1, step = 0.1)
+                               ),
+                               box(title = "Identify regulatory TFs", width = NULL,
+                                   solidHeader = TRUE, collapsible = TRUE, collapsed = TRUE,
+                                   numericInput("elmergetTFpercentage", "Percentage",
+                                                min = 0, max = 1, value = 0.2, step = 0.01)
+                               ),
+                               box(title = "Other options", width = NULL,
+                                   solidHeader = TRUE, collapsible = TRUE, collapsed = TRUE,
+                                   sliderInput("elmercores", "Cores", step=1,
+                                               min = 1, max = parallel::detectCores(), value = 1),
+                                   shinyDirButton('elmerFolder', 'Save folder', 'Please select a folder',
+                                                  class='shinyDirectories btn-default')
+                               ),
+                               actionButton("elmerAnalysisBt",
+                                            "Run analysis",
                                             style = "background-color: #000080;
                                         color: #FFFFFF;
                                         margin-left: auto;
                                         margin-right: auto;
                                         width: 100%",
-                                            icon = icon("floppy-o")))
+                                            icon = icon("flask"))),
+                           box(title = "Plots", width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
+                               box(title = "Type selection", width = NULL,
+                                   solidHeader = TRUE, collapsible = TRUE, collapsed = FALSE,
+                                   selectizeInput("elmerPlotType", "Type of plot:",
+                                                  c("Scatter plots"="scatter.plot",
+                                                    "Schematic Plot"="schematic.plot",
+                                                    "Motif enrichment plot"="motif.enrichment.plot",
+                                                    "TF ranking plot"="ranking.plot"),
+                                                  multiple = FALSE),
+                                   #sliderInput("motif.enrichment.plot.or", "OR", min = 1, max = 20, value = 20),
+                                   #sliderInput("motif.enrichment.plot.lowerOR", "OR", min = 1, max = 20, value = 1.1),
+                                   #sliderInput("motif.enrichment.plot.nbprobes", "NumOfProbes", min = 1, max = 50, value = 10),
+                                   selectizeInput("ranking.plot.motif", "Enriched motif:",
+                                                  NULL,
+                                                  multiple = FALSE),
+                                   selectizeInput("ranking.plot.tf", "Highlight TF:",
+                                                  NULL,
+                                                  multiple = TRUE),
+                                   radioButtons("schematic.plot.type", "Schematic plot by:",
+                                                c("Genes"="genes",
+                                                  "Probes"="probes")),
+                                   selectizeInput("schematic.plot.genes", "Genes:",
+                                                  NULL,
+                                                  multiple = FALSE),
+                                   selectizeInput("schematic.plot.probes", "Probes:",
+                                                  NULL,
+                                                  multiple = FALSE),
+                                   radioButtons("scatter.plot.type", "Scatter plot by:",
+                                                c("By TF"="tf",
+                                                  "By Probes"="probes",
+                                                  "By Pair"="pair")),
+                                   selectizeInput("scatter.plot.genes", "Genes:",
+                                                  NULL,
+                                                  multiple = FALSE),
+                                   sliderInput("scatter.plot.nb.genes", "Number of genes", min = 1, max = 20, value = 20),
+                                   selectizeInput("scatter.plot.probes", "Probes:",
+                                                  NULL,
+                                                  multiple = FALSE),
+                                   selectizeInput("scatter.plot.tf", "TF:",
+                                                  NULL,
+                                                  multiple = TRUE),
+
+                                   selectizeInput("scatter.plot.motif", "Sites with motif:",
+                                                  NULL,
+                                                  multiple = FALSE)),
+                               box(title = "Size options", width = NULL,
+                                   solidHeader = TRUE, collapsible = TRUE, collapsed = TRUE,
+                                   sliderInput("elmerwidth", "Plot Width (%)", min = 0, max = 100, value = 100),
+                                   sliderInput("elmerheight", "Plot Height (px)", min = 0, max = 1200, value = 800)),
+                               actionButton("elmerPlotBt",
+                                            "Plot",
+                                            style = "background-color: #000080;
+                                                     color: #FFFFFF;
+                                                     margin-left: auto;
+                                                     margin-right: auto;
+                                                     width: 100%",
+                                            icon = icon("picture-o"))),
+                           box(title = "Results table", width = NULL,
+                               status = "danger",
+                               solidHeader = FALSE, collapsible = TRUE, collapsed = TRUE,
+                               selectizeInput("elmerTableType", "Table to show:",
+                                              c("TF"="tf",
+                                                "Enriched motifs"="motif",
+                                                "Pair probe/gene"="pair",
+                                                "Signigicant probes"="sigprobes"
+                                              ),
+                                              multiple = FALSE))
                     )
                 )
         )
